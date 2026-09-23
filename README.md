@@ -36,6 +36,18 @@ preserved for MusicBrainz; a 0-5 star column is included only as a readable and
 Navidrome-compatible representation. Computed album ratings remain identified
 as computed and are not treated as explicit track ratings.
 
+Preview MusicBrainz matches for explicitly rated tracks:
+
+```bash
+python itunes-library-helper.py "/path/to/Library.xml" --musicbrainz
+```
+
+The preview writes accepted, ambiguous, and unmatched CSV files plus the exact
+rating and genre XML payloads. Matches are cached so repeated runs do not repeat
+completed searches. After reviewing accepted matches, submit ratings and genre
+upvotes with `--submit`. Use `--match-scope all` to process genres for the full
+library; large exports are intentionally rate-limited and can take a long time.
+
 ## Apple Music Artist Helper
 
 MusicBrainz does not permit artists, releases, or tracklists to be created
