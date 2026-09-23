@@ -1,4 +1,110 @@
-# MusicBrainz Ratings Helper
+# MusicBrainz Helper
+
+Tools for contributing personal ratings and missing Apple Music catalog data to
+MusicBrainz with reviewable, rate-limited workflows.
+
+The project currently keeps each job in its own script:
+
+- `musicbrainz-ratings-helper.py` pushes Navidrome ratings to existing
+  MusicBrainz entities.
+- `musicbrainz-new-artist-helper.py` discovers an Apple Music artist catalog,
+  checks MusicBrainz for possible duplicates, and generates prefilled editor
+  forms for missing releases.
+- `itunes-library-helper.py` extracts ratings, genres, artists, and playlist
+  membership from iTunes library and playlist exports into reviewable reports.
+
+## iTunes Library Helper
+
+Export an iTunes XML library without modifying iTunes or MusicBrainz:
+
+```bash
+python itunes-library-helper.py "/path/to/Library.xml"
+```
+
+Tab-separated playlist exports are supported too:
+
+```bash
+python itunes-library-helper.py "/path/to/playlist.txt" \
+  --output-dir itunes-library-reports/playlist
+```
+
+The output includes `tracks.csv`, explicitly rated tracks in `ratings.csv`,
+loved/disliked flags in `preferences.csv`, artist genre summaries in
+`artists.csv`, genre counts in `genres.csv`, playlist membership in
+`playlist-tracks.csv`, and `summary.json`. The original 0-100 iTunes rating is
+preserved for MusicBrainz; a 0-5 star column is included only as a readable and
+Navidrome-compatible representation. Computed album ratings remain identified
+as computed and are not treated as explicit track ratings.
+
+## Apple Music Artist Helper
+
+MusicBrainz does not permit artists, releases, or tracklists to be created
+directly through its web-service API. This helper uses the supported seeding
+system instead: it creates a local review page whose buttons open the official
+MusicBrainz release editor with Apple metadata already filled in. The helper
+never submits an edit by itself.
+
+Preview an Apple Music artist catalog and generate the review page:
+
+```bash
+python musicbrainz-new-artist-helper.py \
+  "https://music.apple.com/us/artist/youngvynn-q/6776781654"
+```
+
+An album URL also works; the helper resolves its credited artist:
+
+```bash
+python musicbrainz-new-artist-helper.py \
+  "https://music.apple.com/us/album/he-said-i-looked-fine-single/6803960307"
+```
+
+Open the generated report automatically:
+
+```bash
+python musicbrainz-new-artist-helper.py APPLE_URL --open
+```
+
+For a short test, process only the newest release:
+
+```bash
+python musicbrainz-new-artist-helper.py APPLE_URL --max-releases 1 --open
+```
+
+If the report shows multiple same-name artist candidates, inspect them and
+rerun with the correct MBID instead of creating a duplicate:
+
+```bash
+python musicbrainz-new-artist-helper.py APPLE_URL \
+  --artist-mbid f6879d41-00c4-48c6-90cb-5f0875c973e0 --open
+```
+
+If the label already exists in MusicBrainz, its MBID can be pinned too:
+
+```bash
+python musicbrainz-new-artist-helper.py APPLE_URL \
+  --artist-mbid ARTIST_MBID --label-mbid LABEL_MBID --open
+```
+
+The helper fills release titles, artist credits, dates, country, digital-media
+format, release type, track numbers, exact Apple durations, label-name hints,
+the Apple source URL, and an edit note. Store-generated ` - Single` and ` - EP`
+suffixes are removed by default. Use `--keep-store-suffixes` when the suffix is
+actually part of the official title.
+
+By default, a seed is suppressed only when MusicBrainz has an exact title,
+artist, and release-date match. Candidate links remain visible in the report so
+you can inspect less certain matches. `--include-existing` generates forms even
+for exact matches, but should be used carefully.
+
+Apple does not provide enough information to safely infer every MusicBrainz
+field. Review artist identity, artist type, title styling, featured-artist
+credits, label identity, barcode, language, release events, relationships, and
+duplicates before submitting each edit.
+
+Set `MB_CONTACT` in `.env` to a public project URL or contact address. This is
+included in the meaningful User-Agent required by MusicBrainz.
+
+## Ratings Helper
 
 Push Navidrome ratings to MusicBrainz.
 
