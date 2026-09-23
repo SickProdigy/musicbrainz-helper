@@ -285,7 +285,7 @@ class AppleClient:
 class MusicBrainzClient:
     def __init__(self) -> None:
         self.session = requests.Session()
-        contact = os.getenv("MB_CONTACT", "https://gitea.rcs1.top/sickprodigy/musicbrainz-ratings-helper")
+        contact = os.getenv("MB_CONTACT", "https://github.com/SickProdigy/musicbrainz-helper")
         self.session.headers.update(
             {"User-Agent": f"musicbrainz-helper/{SCRIPT_VERSION} ({contact})", "Accept": "application/json"}
         )

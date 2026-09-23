@@ -132,7 +132,7 @@ def genre_tag(value: str) -> str:
 
 class MusicBrainzClient:
     def __init__(self, username: str | None = None, password: str | None = None) -> None:
-        contact = os.getenv("MB_CONTACT", "https://gitea.rcs1.top/sickprodigy/musicbrainz-ratings-helper")
+        contact = os.getenv("MB_CONTACT", "https://github.com/SickProdigy/musicbrainz-helper")
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": f"{CLIENT} ({contact})", "Accept": "application/json"})
         if username and password:
