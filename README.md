@@ -103,10 +103,18 @@ the Apple source URL, and an edit note. Store-generated ` - Single` and ` - EP`
 suffixes are removed by default. Use `--keep-store-suffixes` when the suffix is
 actually part of the official title.
 
-By default, a seed is suppressed only when MusicBrainz has an exact title,
-artist, and release-date match. Candidate links remain visible in the report so
-you can inspect less certain matches. `--include-existing` generates forms even
-for exact matches, but should be used carefully.
+By default, a seed is suppressed when MusicBrainz has an exact title and artist
+match with a compatible release date. Date matching compares the year and, when
+both sources provide it, the month; day differences are tolerated because
+storefront availability can vary. Candidate links remain visible in the report
+so you can inspect less certain matches. `--include-existing` generates forms
+even for compatible matches. Suppressed releases also retain a per-release
+force button for cases where you verify that the Apple release is distinct;
+use it carefully to avoid creating duplicates. Candidates that do not suppress
+a normal seed show the title, artist, or date difference that prevented the
+match so you know what to verify or update. When an exact-title search finds
+nothing, the helper also retries without a trailing parenthetical to reveal
+possible title variants without automatically treating them as duplicates.
 
 Apple does not provide enough information to safely infer every MusicBrainz
 field. Review artist identity, artist type, title styling, featured-artist

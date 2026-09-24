@@ -61,6 +61,7 @@ class Match:
     disambiguation: str
     score: int
     exact: bool
+    reasons: tuple[str, ...] = ()
 
 
 def parse_args() -> argparse.Namespace:
@@ -119,6 +120,24 @@ def load_dotenv(path: Path = Path(".env")) -> None:
 def normalize(value: str) -> str:
     folded = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
     return re.sub(r"[^a-z0-9]+", "", folded.casefold())
+
+
+def without_trailing_parenthetical(value: str) -> str:
+    return re.sub(r"\s*[\[(][^\])]+[\])]\s*$", "", value).strip()
+
+
+def compatible_release_dates(apple_date: str, musicbrainz_date: str) -> bool:
+    """Match known date parts while tolerating storefront-level day differences."""
+    apple_match = re.fullmatch(r"(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?", apple_date)
+    musicbrainz_match = re.fullmatch(r"(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?", musicbrainz_date)
+    if not apple_match or not musicbrainz_match:
+        return False
+
+    apple_year, apple_month, _ = apple_match.groups()
+    musicbrainz_year, musicbrainz_month, _ = musicbrainz_match.groups()
+    if apple_year != musicbrainz_year:
+        return False
+    return not (apple_month and musicbrainz_month) or apple_month == musicbrainz_month
 
 
 def lucene_quote(value: str) -> str:
@@ -341,28 +360,61 @@ class MusicBrainzClient:
         response.raise_for_status()
         return str(response.json().get("name", "")) or None
 
+    def release_date(self, mbid: str) -> str:
+        wait = self.next_request_at - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        self.next_request_at = time.monotonic() + 1.1
+        response = self.session.get(
+            f"{MUSICBRAINZ_API_URL}/release/{mbid}", params={"fmt": "json"}, timeout=30
+        )
+        response.raise_for_status()
+        return str(response.json().get("date", ""))
+
     def release_matches(self, release: AppleRelease, artist_mbid: str | None) -> list[Match]:
         artist_query = f"arid:{artist_mbid}" if artist_mbid else f"artist:{lucene_quote(release.artist)}"
         query = f"release:{lucene_quote(release.title)} AND {artist_query}"
         payload = self.search("release", query, 10)
+        rows = payload.get("releases", [])
+        simpler_title = without_trailing_parenthetical(release.title)
+        if not rows and simpler_title != release.title:
+            query = f"release:{lucene_quote(simpler_title)} AND {artist_query}"
+            rows = self.search("release", query, 10).get("releases", [])
         matches: list[Match] = []
-        for row in payload.get("releases", []):
+        for row in rows:
+            mbid = str(row.get("id", ""))
+            candidate_title = str(row.get("title", ""))
             credit = "".join(
                 str(part.get("name", "")) + str(part.get("joinphrase", ""))
                 for part in row.get("artist-credit", [])
             )
-            exact = normalize(str(row.get("title", ""))) == normalize(release.title)
-            if not artist_mbid:
-                exact = exact and normalize(credit) == normalize(release.artist)
-            if release.release_date:
-                exact = exact and str(row.get("date", "")) == release.release_date
+            title_matches = normalize(candidate_title) == normalize(release.title)
+            artist_matches = bool(artist_mbid) or normalize(credit) == normalize(release.artist)
+            candidate_date = str(row.get("date", ""))
+            if title_matches and artist_matches and release.release_date and not candidate_date and mbid:
+                candidate_date = self.release_date(mbid)
+            date_matches = (
+                not release.release_date
+                or compatible_release_dates(release.release_date, candidate_date)
+            )
+            exact = title_matches and artist_matches and date_matches
+            reasons = []
+            if not title_matches:
+                reasons.append("title differs")
+            if not artist_matches:
+                reasons.append("artist differs")
+            if release.release_date and candidate_date and candidate_date != release.release_date:
+                reasons.append("date differs")
+            elif release.release_date and not candidate_date:
+                reasons.append("date unavailable")
             matches.append(
                 Match(
-                    mbid=str(row.get("id", "")),
-                    name=str(row.get("title", "")),
-                    disambiguation=f"{credit} | {row.get('date', '')} | {row.get('country', '')}",
+                    mbid=mbid,
+                    name=candidate_title,
+                    disambiguation=f"{credit} | {candidate_date} | {row.get('country', '')}",
                     score=int(row.get("score", 0)),
                     exact=exact,
+                    reasons=tuple(reasons),
                 )
             )
         return matches
@@ -483,9 +535,13 @@ def match_list(matches: list[Match]) -> str:
     rows = []
     for match in matches[:5]:
         marker = "exact" if match.exact else "possible"
+        notes = " ".join(
+            f'<strong class="reason">{html.escape(reason)}</strong>' for reason in match.reasons
+        )
         rows.append(
             f'<li><a href="https://musicbrainz.org/release/{html.escape(match.mbid)}" target="_blank">'
-            f"{html.escape(match.name)}</a> ({match.score}%, {marker}) {html.escape(match.disambiguation)}</li>"
+            f"{html.escape(match.name)}</a> ({match.score}%, {marker}) {html.escape(match.disambiguation)} "
+            f"{notes}</li>"
         )
     return "<ul>" + "".join(rows) + "</ul>"
 
@@ -502,18 +558,22 @@ def render_report(
     release_sections = []
     for release, matches, should_seed in release_rows:
         duration = sum(track.duration_ms for track in release.tracks) // 1000
-        action = ""
+        fields = release_seed(
+            release, artist_mbid, args.label_mbid, args.language, args.script, artist_name
+        )
         if should_seed:
-            fields = release_seed(
-                release, artist_mbid, args.label_mbid, args.language, args.script, artist_name
-            )
             action = (
                 f'<form method="post" enctype="multipart/form-data" action="{MUSICBRAINZ_RELEASE_EDITOR}" target="_blank">'
                 f"{hidden_fields(fields)}"
                 '<button type="submit">Open prefilled release editor</button></form>'
             )
         else:
-            action = '<p class="skip">Exact MusicBrainz match found; seed suppressed.</p>'
+            action = (
+                '<p class="skip">Compatible MusicBrainz match found; seed suppressed.</p>'
+                f'<form method="post" enctype="multipart/form-data" action="{MUSICBRAINZ_RELEASE_EDITOR}" target="_blank">'
+                f"{hidden_fields(fields)}"
+                '<button class="force" type="submit">Force open prefilled release editor</button></form>'
+            )
         tracks = "".join(
             f"<li>{track.number}. {html.escape(track.title)} "
             f"({track.duration_ms // 60000}:{(track.duration_ms // 1000) % 60:02d})</li>"
@@ -570,6 +630,8 @@ def render_report(
 body{{font:16px/1.5 system-ui,sans-serif;max-width:1000px;margin:2rem auto;padding:0 1rem;color:#202124}}
 header,section{{border-bottom:1px solid #d8d8d8;padding:0 0 1.5rem;margin-bottom:1.5rem}}
 button{{background:#ba478f;color:white;border:0;padding:.7rem 1rem;font-weight:700;cursor:pointer}}
+.force{{background:#5f6368;padding:.3rem .5rem;font-size:.75rem;font-weight:600}}
+.reason{{display:inline-block;background:#fff1df;color:#8a4300;padding:.1rem .35rem;font-size:.75rem;margin-left:.25rem}}
 .warning{{background:#fff4ce;border-left:4px solid #c58b00;padding:1rem}} .skip{{color:#26734d;font-weight:700}}
 code{{overflow-wrap:anywhere}} a{{color:#8f3575}}
 summary{{cursor:pointer;font-weight:700}}

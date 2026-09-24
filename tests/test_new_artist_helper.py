@@ -32,6 +32,136 @@ class NewArtistHelperTests(unittest.TestCase):
         self.assertEqual(helper.infer_primary_type("Example - Single", 1), "Single")
         self.assertEqual(helper.infer_primary_type("Example - EP", 5), "EP")
         self.assertEqual(helper.infer_primary_type("Example", 10), "Album")
+        self.assertEqual(
+            helper.without_trailing_parenthetical("Through the Valley (The Last of Us Part II)"),
+            "Through the Valley",
+        )
+
+    def test_release_dates_match_on_known_components(self):
+        self.assertTrue(helper.compatible_release_dates("2016-12-19", "2016"))
+        self.assertTrue(helper.compatible_release_dates("2016-12-19", "2016-12"))
+        self.assertTrue(helper.compatible_release_dates("2016-12-19", "2016-12-21"))
+        self.assertFalse(helper.compatible_release_dates("2016-12-19", "2016-11-30"))
+        self.assertFalse(helper.compatible_release_dates("2016-12-19", "2017"))
+        self.assertFalse(helper.compatible_release_dates("2016-12-19", ""))
+
+    def test_release_match_fetches_date_missing_from_search_result(self):
+        client = helper.MusicBrainzClient()
+        client.search = Mock(
+            return_value={
+                "releases": [
+                    {
+                        "id": "release-mbid",
+                        "title": "Jungle",
+                        "artist-credit": [{"name": "Tash Sultana"}],
+                        "score": 100,
+                    }
+                ]
+            }
+        )
+        client.release_date = Mock(return_value="2016")
+        release = helper.AppleRelease(
+            apple_id=1881446984,
+            title="Jungle",
+            store_title="Jungle - Single",
+            artist="Tash Sultana",
+            artist_id=1105306265,
+            release_date="2016-12-19",
+            country="US",
+            genre="Alternative",
+            copyright="",
+            explicit=False,
+            url="https://music.apple.com/us/album/jungle-single/1881446984",
+            primary_type="Single",
+            tracks=(),
+        )
+
+        matches = client.release_matches(release, "artist-mbid")
+
+        self.assertTrue(matches[0].exact)
+        self.assertIn("| 2016 |", matches[0].disambiguation)
+        self.assertEqual(matches[0].reasons, ("date differs",))
+        client.release_date.assert_called_once_with("release-mbid")
+
+    def test_literal_release_date_match_has_no_note(self):
+        client = helper.MusicBrainzClient()
+        client.search = Mock(
+            return_value={
+                "releases": [
+                    {
+                        "id": "release-mbid",
+                        "title": "Example",
+                        "date": "2026-01-02",
+                        "artist-credit": [{"name": "Example Artist"}],
+                        "score": 100,
+                    }
+                ]
+            }
+        )
+        release = helper.AppleRelease(
+            1, "Example", "Example - Single", "Example Artist", 2, "2026-01-02",
+            "US", "", "", False, "https://music.apple.com/", "Single", ()
+        )
+
+        match = client.release_matches(release, "artist-mbid")[0]
+
+        self.assertTrue(match.exact)
+        self.assertEqual(match.reasons, ())
+
+    def test_release_match_explains_date_mismatch(self):
+        client = helper.MusicBrainzClient()
+        client.search = Mock(
+            return_value={
+                "releases": [
+                    {
+                        "id": "release-mbid",
+                        "title": "Example",
+                        "date": "2025-11-30",
+                        "artist-credit": [{"name": "Example Artist"}],
+                        "score": 100,
+                    }
+                ]
+            }
+        )
+        release = helper.AppleRelease(
+            1, "Example", "Example - Single", "Example Artist", 2, "2026-01-02",
+            "US", "", "", False, "https://music.apple.com/", "Single", ()
+        )
+
+        match = client.release_matches(release, "artist-mbid")[0]
+
+        self.assertFalse(match.exact)
+        self.assertEqual(match.reasons, ("date differs",))
+        self.assertIn('<strong class="reason">date differs</strong>', helper.match_list([match]))
+
+    def test_release_search_retries_without_trailing_parenthetical(self):
+        client = helper.MusicBrainzClient()
+        client.search = Mock(
+            side_effect=[
+                {"releases": []},
+                {
+                    "releases": [
+                        {
+                            "id": "release-mbid",
+                            "title": "Through the Valley",
+                            "date": "2020-07-24",
+                            "artist-credit": [{"name": "Tash Sultana"}],
+                            "score": 100,
+                        }
+                    ]
+                },
+            ]
+        )
+        release = helper.AppleRelease(
+            1, "Through the Valley (The Last of Us Part II)", "", "Tash Sultana", 2,
+            "2020-07-24", "US", "", "", False, "https://music.apple.com/", "Single", ()
+        )
+
+        match = client.release_matches(release, "artist-mbid")[0]
+
+        self.assertFalse(match.exact)
+        self.assertEqual(match.reasons, ("title differs",))
+        self.assertIn('release:"Through the Valley"', client.search.call_args_list[1].args[1])
 
     def test_moves_featured_artist_from_track_title_to_credit(self):
         self.assertEqual(
@@ -73,6 +203,34 @@ class NewArtistHelperTests(unittest.TestCase):
         self.assertEqual(fields["events.0.date.day"], "28")
         self.assertEqual(fields["artist_credit.names.0.mbid"], "artist-mbid")
         self.assertNotIn("Please verify", fields["edit_note"])
+
+    def test_suppressed_release_keeps_force_seed_button(self):
+        release = helper.AppleRelease(
+            apple_id=1881446984,
+            title="Jungle",
+            store_title="Jungle - Single",
+            artist="Tash Sultana",
+            artist_id=1105306265,
+            release_date="2016-12-19",
+            country="US",
+            genre="Alternative",
+            copyright="",
+            explicit=False,
+            url="https://music.apple.com/us/album/jungle-single/1881446984",
+            primary_type="Single",
+            tracks=(),
+        )
+        args = Mock(label_mbid=None, language=None, script="Latn", country="us")
+
+        report = helper.render_report(
+            "Tash Sultana", 1105306265, [], "artist-mbid", "Tash Sultana",
+            [(release, [], False)], args
+        )
+
+        notice = report.index("Compatible MusicBrainz match found; seed suppressed.")
+        force_button = report.index("Force open prefilled release editor")
+        self.assertGreater(force_button, notice)
+        self.assertIn(helper.MUSICBRAINZ_RELEASE_EDITOR, report)
 
     def test_releases_exclude_appears_on_collections(self):
         client = helper.AppleClient("us")
