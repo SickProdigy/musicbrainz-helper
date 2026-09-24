@@ -3,6 +3,7 @@ __pycache__/
 logs/
 new-artist-reports/
 itunes-library-reports/
+lidarr-lastfm-genre-reports/
 *.py[cod]
 .env
 .pytest_cache/

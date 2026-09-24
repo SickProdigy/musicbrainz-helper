@@ -12,6 +12,45 @@ The project currently keeps each job in its own script:
   forms for missing releases.
 - `itunes-library-helper.py` extracts ratings, genres, artists, and playlist
   membership from iTunes library and playlist exports into reviewable reports.
+- `lidarr-lastfm-genres-helper.py` maps Last.fm genres onto MusicBrainz artists,
+  release groups, every release version, and recordings from a Lidarr catalog.
+
+## Lidarr Last.fm Genre Helper
+
+Preview genre upvotes for Lidarr's wanted/missing albums (the default):
+
+```bash
+python lidarr-lastfm-genres-helper.py
+```
+
+Process every album known to Lidarr instead:
+
+```bash
+python lidarr-lastfm-genres-helper.py --scope all
+```
+
+Process only albums that are not currently wanted/missing:
+
+```bash
+python lidarr-lastfm-genres-helper.py --scope present
+```
+
+After reviewing `lidarr-lastfm-genre-reports/genres.csv` and
+`musicbrainz-tags.xml`, submit the upvotes with:
+
+```bash
+python lidarr-lastfm-genres-helper.py --submit
+```
+
+Set `LIDARR_URL`, `LIDARR_API_KEY`, and `LASTFM_API_KEY` in `.env`. MusicBrainz
+credentials are needed only for `--submit`. Last.fm community tags are filtered
+against MusicBrainz's recognized genre vocabulary and limited to seven per
+entity by default. Use repeated `--entity` options to limit targets, such as
+`--entity artist --entity release-group`, and `--max-albums 5` for a short test.
+
+Missing scope means albums listed by Lidarr as wanted/missing. Their MusicBrainz
+release-group IDs are expanded to all known release versions and recordings, so
+the contribution does not depend on already having local audio files.
 
 ## iTunes Library Helper
 
