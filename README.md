@@ -16,6 +16,29 @@ The project currently keeps each job in its own script:
   release groups, every release version, and recordings from a Lidarr catalog.
 - `navidrome-genres-helper.py` contributes genres already embedded in a
   Navidrome library to matching MusicBrainz entities.
+- `lidarr-discogs-genres-helper.py` records the safe matching and contribution
+  plan for a future Discogs-backed genre helper. It is currently a non-networked
+  scaffold and cannot submit data.
+
+## Planned Genre Sources
+
+Run the staged Discogs design summary with:
+
+```bash
+python lidarr-discogs-genres-helper.py
+```
+
+Discogs is the next implementation target. Release and master `genres` and
+`styles` can contribute to MusicBrainz artists, release groups, and releases.
+Matching should prefer an existing Discogs URL relationship, then barcode or
+catalog-number evidence; name-only search results must remain review-only.
+Release-level metadata must not be copied onto recordings.
+
+Spotify is a later candidate for artist and album enrichment and for identity
+evidence through UPC and ISRC values. Its album genre field is not consistently
+populated, and track metadata should not be treated as a source of genres.
+Every provider should retain its own cache, match report, checkpoints, and
+submission ledger so sources can be reviewed and rerun independently.
 
 ## Navidrome Genre Helper
 
