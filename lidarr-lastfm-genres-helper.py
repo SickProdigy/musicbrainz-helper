@@ -265,6 +265,7 @@ class LastFmClient:
         name: str,
         valid_mbids: set[str],
         name_fallback: bool = False,
+        warn: bool = True,
     ) -> tuple[list[dict], str]:
         key = f"v1|{normalized(artist)}|{normalized(name)}"
         cached = self.cache.get(f"lastfm-{entity}-info", key)
@@ -283,15 +284,16 @@ class LastFmClient:
             tags = (cached.get("tags") or cached.get("toptags") or {}).get("tag", [])
             return tags, f"lastfm:{entity}-verified"
 
-        if returned_mbid:
+        if returned_mbid and warn:
             logging.warning(
                 "Skipping ambiguous Last.fm %s match for %s / %s: returned MBID %s",
                 entity, artist, name, returned_mbid,
             )
-        else:
+        elif not returned_mbid and warn:
             logging.warning("Skipping unverified Last.fm %s match for %s / %s: no MBID returned", entity, artist, name)
         if name_fallback:
-            logging.warning("Using requested name fallback for Last.fm %s: %s / %s", entity, artist, name)
+            if warn:
+                logging.warning("Using requested name fallback for Last.fm %s: %s / %s", entity, artist, name)
             return self.top_tags(entity, artist, name), f"lastfm:{entity}-name"
         return [], f"lastfm:{entity}-unmatched"
 
@@ -796,12 +798,16 @@ def main() -> int:
                                 group["lastfm_mbids"].add(str(track["id"]))
 
             if "recording" in entities:
+                skipped_track_matches = 0
                 for recording_group in recordings_by_title.values():
                     track_title = recording_group["title"]
                     track_tags, track_source = lastfm.verified_info_tags(
                         "track", artist_name, track_title, recording_group["lastfm_mbids"],
                         name_fallback=args.name_fallback,
+                        warn=False,
                     )
+                    if track_source == "lastfm:track-unmatched":
+                        skipped_track_matches += 1
                     genres = filtered_genres(track_tags, vocabulary, args.max_tags)
                     for recording_mbid in recording_group["mbids"]:
                         pending_votes.extend(
@@ -810,6 +816,11 @@ def main() -> int:
                                 genres, track_source,
                             )
                         )
+                if skipped_track_matches:
+                    logging.info(
+                        "Skipped %d unverified Last.fm track matches for %s / %s",
+                        skipped_track_matches, artist_name, title,
+                    )
         except Exception as exc:
             logging.exception("Album failed and will remain eligible for --resume: %s / %s", artist_name, title)
             album_failures.append(
@@ -824,7 +835,8 @@ def main() -> int:
         if processed_this_run % args.checkpoint_every == 0:
             checkpoint()
 
-    checkpoint()
+    if checkpoint_ids or pending_votes or processed_this_run == 0 or album_failures or submission_failures:
+        checkpoint()
     final_summary = summary()
     write_reports(args.output_dir, finalized_rows(targets), final_summary)
     print(json.dumps(final_summary, indent=2))
