@@ -4,6 +4,7 @@ logs/
 new-artist-reports/
 itunes-library-reports/
 lidarr-lastfm-genre-reports/
+navidrome-genre-reports/
 *.py[cod]
 .env
 .pytest_cache/

@@ -14,6 +14,34 @@ The project currently keeps each job in its own script:
   membership from iTunes library and playlist exports into reviewable reports.
 - `lidarr-lastfm-genres-helper.py` maps Last.fm genres onto MusicBrainz artists,
   release groups, every release version, and recordings from a Lidarr catalog.
+- `navidrome-genres-helper.py` contributes genres already embedded in a
+  Navidrome library to matching MusicBrainz entities.
+
+## Navidrome Genre Helper
+
+Preview genre upvotes from five Navidrome albums:
+
+```bash
+python navidrome-genres-helper.py --max-albums 5
+```
+
+The preview writes `genres.csv`, `unmatched-genres.csv`,
+`musicbrainz-tags.xml`, and `summary.json` under `navidrome-genre-reports/`.
+Nothing is posted without `--submit`. Review the CSV and then submit with:
+
+```bash
+python navidrome-genres-helper.py --submit
+```
+
+The helper reads both the legacy single `genre` field and OpenSubsonic's
+multi-value `genres` field. It uses embedded MusicBrainz IDs to target artists,
+releases, release groups, and recordings, filters values against MusicBrainz's
+recognized genre vocabulary, and limits each entity to seven genres by default.
+Use repeated `--entity` options to select target types, `--artist-id` for one
+Navidrome artist, and `--max-tags` to change the per-entity limit.
+
+Set `NAVIDROME_BASE_URL`, `NAVIDROME_USERNAME`, and `NAVIDROME_PASSWORD` in
+`.env`. MusicBrainz credentials are required only with `--submit`.
 
 ## Lidarr Last.fm Genre Helper
 
@@ -51,6 +79,30 @@ entity by default. Use repeated `--entity` options to limit targets, such as
 Missing scope means albums listed by Lidarr as wanted/missing. Their MusicBrainz
 release-group IDs are expanded to all known release versions and recordings, so
 the contribution does not depend on already having local audio files.
+
+Long runs checkpoint every 25 albums. Reports, `progress-preview.json` or
+`progress-submit.json`,
+`submitted-votes.json`, `failed-albums.csv`, and `failed-submissions.csv` are
+updated in the output directory. Restart an interrupted run with `--resume`;
+already completed albums and accepted entity/genre votes are skipped:
+
+```bash
+python lidarr-lastfm-genres-helper.py --scope missing --submit --resume
+```
+
+Preview and submission progress are intentionally separate, so a reviewed
+preview does not make a later `--submit --resume` run skip those albums.
+
+Use `--start-album-id` with either a Lidarr album ID or MusicBrainz
+release-group MBID, or `--start-artist-id` with a Lidarr artist ID or
+MusicBrainz artist MBID. `--artist-id` limits a run to one artist. Timestamped
+logs are written under `logs/`.
+
+Last.fm lookups use MusicBrainz IDs by default to avoid same-name artist, album,
+and recording collisions. `--name-fallback` permits broader name-based lookups
+when Last.fm has no tags for an MBID; review those results particularly closely.
+MusicBrainz submissions are incremental, recorded per genre vote, retried on
+transient failures, and split down to individual votes when a batch is rejected.
 
 ## iTunes Library Helper
 
