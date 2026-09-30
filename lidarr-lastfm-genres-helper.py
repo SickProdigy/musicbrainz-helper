@@ -384,8 +384,19 @@ class MusicBrainzClient:
         raise RuntimeError("MusicBrainz submission failed.")
 
 
-def filtered_genres(tags: list[dict], vocabulary: dict[str, str], maximum: int) -> list[str]:
-    ranked = sorted(tags, key=lambda row: int(row.get("count", 0) or 0), reverse=True)
+def filtered_genres(tags: object, vocabulary: dict[str, str], maximum: int) -> list[str]:
+    candidates = [tags] if isinstance(tags, dict) else tags if isinstance(tags, list) else []
+    valid_tags = [row for row in candidates if isinstance(row, dict)]
+    if len(valid_tags) != len(candidates):
+        logging.warning("Ignoring %d malformed Last.fm tag entries", len(candidates) - len(valid_tags))
+
+    def tag_count(row: dict) -> int:
+        try:
+            return int(row.get("count", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    ranked = sorted(valid_tags, key=tag_count, reverse=True)
     result: list[str] = []
     for row in ranked:
         genre = vocabulary.get(normalized(str(row.get("name", ""))))

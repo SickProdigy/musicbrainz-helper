@@ -33,6 +33,29 @@ class LidarrLastFmGenresHelperTests(unittest.TestCase):
             ["hip hop", "alternative rock"],
         )
 
+    def test_filters_single_tag_object_returned_by_lastfm(self):
+        tags = {"name": "Progressive House", "count": "100"}
+        vocabulary = {"progressivehouse": "progressive house"}
+
+        self.assertEqual(
+            helper.filtered_genres(tags, vocabulary, 7),
+            ["progressive house"],
+        )
+
+    def test_filters_genres_ignores_malformed_entries_and_counts(self):
+        tags = [
+            "not-a-tag-object",
+            {"name": "Ambient", "count": "unknown"},
+            {"name": "Techno", "count": 20},
+        ]
+        vocabulary = {"ambient": "ambient", "techno": "techno"}
+
+        with self.assertLogs(level="WARNING") as logs:
+            genres = helper.filtered_genres(tags, vocabulary, 7)
+
+        self.assertEqual(genres, ["techno", "ambient"])
+        self.assertIn("Ignoring 1 malformed Last.fm tag entries", logs.output[0])
+
     def test_missing_albums_are_paginated(self):
         client = helper.LidarrClient("http://lidarr", "key")
         client.get = Mock(
