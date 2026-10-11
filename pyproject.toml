@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "musicbrainz-helper"
+version = "0.3.0"
+description = "MusicBrainz contributions and Subsonic rating synchronization"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.31", "mutagen>=1.47", "sonicratings-engine==0.1.0"]
+
+[project.scripts]
+musicbrainz-genres = "musicbrainz_helper.musicbrainz_genres:main"
+musicbrainz-ratings = "musicbrainz_helper.ratings_helper:main"
+
+[tool.setuptools.packages.find]
+include = ["musicbrainz_helper*"]

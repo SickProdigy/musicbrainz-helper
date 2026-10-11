@@ -675,9 +675,10 @@ def main() -> int:
     cache = JsonCache(args.output_dir / "cache.json")
     lidarr = LidarrClient(required_env("LIDARR_URL"), required_env("LIDARR_API_KEY"))
     lastfm = LastFmClient(required_env("LASTFM_API_KEY"), cache)
-    username, password = os.getenv("MB_USERNAME", ""), os.getenv("MB_PASSWORD", "")
+    username = os.getenv("MB_USERNAME", "")
+    password = os.getenv("MB_TOKEN", "") or os.getenv("MB_PASSWORD", "")
     if args.submit and not (username and password):
-        raise SystemExit("--submit requires MB_USERNAME and MB_PASSWORD.")
+        raise SystemExit("--submit requires MB_USERNAME and MB_TOKEN (MusicBrainz application token).")
     musicbrainz = MusicBrainzClient(cache, username, password)
     vocabulary = musicbrainz.genres()
 

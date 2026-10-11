@@ -375,3 +375,91 @@ logs/musicbrainz-ratings-helper_1783864011.log
 - MusicBrainz API requests are throttled to about one request per second.
 - Rating submissions are batched into one MusicBrainz POST where possible instead of sending one request per rating.
 - Navidrome access uses the Subsonic API only; the helper does not read the Navidrome database directly.
+# Imported Lidarr genres
+
+`imported-genres-helper.py` accepts exact-album jobs from arr-scripts, reads
+embedded provider or Beets genres, and reuses the Last.fm helper's MusicBrainz
+release expansion, filtering and submission machinery. It supports singles,
+EPs and albums without requiring Beets or Navidrome.
+
+```bash
+python imported-genres-helper.py enqueue --album-id 123 --queue-dir imported-genre-jobs
+python imported-genres-helper.py work --queue-dir imported-genre-jobs
+python imported-genres-helper.py work --queue-dir imported-genre-jobs --credentials-file .env --submit
+```
+
+Enqueue uses `LIDARR_URL` and `LIDARR_API_KEY` from the environment (or an explicit
+`--credentials-file`). The worker uses `MB_USERNAME`, `MB_TOKEN` and optional
+`MB_CONTACT`. Preview is the default. Imported genres target the release group,
+all its release editions and exact embedded recording IDs verified in those
+releases. Different recordings are not expanded by title alone. Repeated
+`--entity` flags limit targets; artist contributions require an explicit
+`--entity artist`. `--max-tags` defaults to seven per entity.
+
+Jobs are atomic snapshots, coalesced by content. Preview and submission completion
+are separate; reports are stored under `reports/<mode>/<policy>/<job>/`.
+Submission ledgers are account-specific. One locked worker handles MusicBrainz
+requests serially; failed jobs remain available for retry. Run `work` again to
+retry or schedule it. The arr-scripts integration polls every minute.
+
+See `/sickprodigy/arr-scripts`, `lidarr/musicbrainz-genres.md`, for installation
+and settings. Final embedded tags represent the user's selected genres; source
+labels describe the processing path and do not imply independent provider votes.
+
+For a whole-library genre export and contribution pass:
+
+```bash
+python imported-genres-helper.py scan --queue-dir imported-genre-jobs --profile sickprodigy --credentials-file .env
+python imported-genres-helper.py work --queue-dir imported-genre-jobs --profile sickprodigy --credentials-file .env
+```
+
+`scan` covers present Lidarr albums and saves a timestamped JSON export under
+`library-snapshots/`, preserving raw genre values, file paths and selected matching
+tags before MusicBrainz vocabulary filtering. It queues suggestions without
+making MusicBrainz requests. Unreadable albums are reported while other albums
+continue. Repeat a scan after retagging to retain new history and capture new
+genres. This exports genre metadata, not audio or every possible tag, and does
+not implement restoration.
+
+An optional `--profile` label separates jobs, exports, reports and ledgers under
+`<queue-dir>/profiles/<label>/`; use the same label on enqueue, scan and work.
+Omitting it preserves the original layout. The authenticated `MB_USERNAME`
+selects the actual MusicBrainz account, regardless of the local label. Submission
+reports name that account. Retagging adds upvotes for new genres without
+automatically withdrawing old votes. MusicBrainz retains user-specific tag votes,
+not a complete restorable copy of the library.
+
+The arr-scripts installer bundles the helper directly. Its application settings
+are only `enableMusicBrainzHelper`, `musicBrainzUsername` and
+`musicBrainzToken` in `extended.conf`. Enabled and authenticated installations
+contribute automatically. The wrapper uses `--account-profile` to derive a safe,
+distinct local profile from `MB_USERNAME`; no extra profile or submission setting
+is needed. The standalone CLI above retains explicit preview/submission controls.
+
+For this integration, `MB_TOKEN` is an application token created under MusicBrainz
+Account > Applications, not the website login password. Authentication uses HTTP
+Digest over HTTPS. `MB_PASSWORD` remains a legacy environment-variable alias for
+the token in standalone workflows. OAuth is not implemented in this helper.
+# Installed Lidarr integration
+
+The `musicbrainz_helper/` package exposes `musicbrainz-genres` and
+`musicbrainz-ratings` commands for arr-scripts. This project maintains contribution
+and synchronization logic; arr-scripts maintains `extended.conf`, import hooks
+and background services. The separately installed `sonicratings-engine` package maintains
+provider scoring and can also support SonicRatings's future GUI.
+
+Install the sibling SonicRatings engine first, then this package with `pip install .`.
+For development with both shared checkouts:
+
+```bash
+python -m pip install ../SonicRatings .
+musicbrainz-genres --help
+musicbrainz-ratings --help
+python -B -m unittest discover -s tests -p 'test_integrated*.py'
+```
+
+Package version 0.3.0 is pinned by arr-scripts to release tag `v0.3.0`; its engine
+dependency is 0.1.0 (`engine-v0.1.0`). Publish both package releases before deploying
+that arr-scripts revision. Packaging does not change existing local job, profile,
+provenance or submission-ledger formats. Root-level standalone scripts remain
+available for existing manual workflows.
