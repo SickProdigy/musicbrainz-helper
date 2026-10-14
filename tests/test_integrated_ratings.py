@@ -1,15 +1,16 @@
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 import xml.etree.ElementTree as ET
 
-from musicbrainz_helper import ratings_helper as helper
-from sonicratings_engine.ratings import score_lastfm
+from musicbrainz_helper import ratings, ratings_worker as helper
 
 RECORDING = "00000000-0000-4000-8000-000000000004"
 OTHER = "00000000-0000-4000-8000-000000000005"
@@ -18,41 +19,26 @@ SONG = {"id": "song1", "musicBrainzId": RECORDING, "userRating": 0,
 TRACK = {"recording": RECORDING, "artist": "Artist", "album": "Album", "title": "Song",
          "path": "/music/Artist/Album/Song.flac"}
 
-
 class FakeSubsonic:
     def __init__(self, *songs):
-        self.data = {str(song["id"]): copy.deepcopy(song) for song in songs}
-        self.writes = []
-        self.fail = False
-        self.lost_response = False
+        self.data = {str(s["id"]): copy.deepcopy(s) for s in songs}
         self.scans = 0
-
     def songs(self):
         self.scans += 1
-        if self.fail:
-            raise RuntimeError("Unavailable")
         return copy.deepcopy(self.data)
-
-    def get_song(self, song_id):
-        return copy.deepcopy(self.data[song_id])
-
-    def set_rating(self, song_id, rating):
-        self.data[song_id]["userRating"] = rating
-        self.writes.append((song_id, rating))
-        if self.lost_response:
-            raise RuntimeError("Timeout after write")
-
+    def get_song(self, identity):
+        return copy.deepcopy(self.data[identity])
+    def set_rating(self, *args):
+        raise AssertionError("The helper must never write Subsonic ratings")
 
 class FakeMB:
     def __init__(self):
         self.writes = []
         self.fail = False
-
-    def submit(self, payload, endpoint="tag"):
+    def submit(self, body, endpoint="rating"):
         if self.fail:
-            raise RuntimeError("Unavailable")
-        self.writes.append((endpoint, ET.fromstring(payload)))
-
+            raise RuntimeError("temporary failure")
+        self.writes.append((endpoint, ET.fromstring(body)))
 
 class RatingsTests(unittest.TestCase):
     def setUp(self):
@@ -61,192 +47,172 @@ class RatingsTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.nav = FakeSubsonic(SONG)
         self.mb = FakeMB()
-        self.provider = Mock()
-        self.provider.rating.return_value = (4, "lastfm")
-
+    def run_worker(self, now=1000, **kwargs):
+        return helper.run_worker(self.root, self.nav, self.mb, submit=True,
+                                 account="account", interval=10, now=now, **kwargs)
     def job(self):
         helper.genres.write_json(self.root / "jobs/job.json", {"tracks": [TRACK]})
-
-    def run_worker(self, now=1000, **kwargs):
-        return helper.run_worker(self.root, self.nav, self.provider, self.mb,
-                                 submit=True, account="account", interval=10, now=now, **kwargs)
-
     def state(self):
         return json.loads((self.root / "state.json").read_text())
-
-    def submitted_values(self):
+    def votes(self):
         return [int(tree.find(".//{*}user-rating").text) for _, tree in self.mb.writes]
-
-    def test_lastfm_import_rates_then_submits_once(self):
-        self.job()
-        self.assertEqual(self.run_worker(), 0)
-        self.assertEqual(self.nav.writes, [("song1", 4)])
-        self.assertEqual(self.submitted_values(), [80])
-        self.assertEqual(self.mb.writes[0][0], "rating")
-        self.run_worker(now=1011)
-        self.assertEqual(self.submitted_values(), [80])
-        self.assertEqual(self.state()["songs"]["song1"]["source"], "lastfm")
-        self.assertFalse((self.root / "jobs/job.json").exists())
-
-    def test_musicbrainz_source_stays_local_then_manual_change_and_clear_sync(self):
-        self.provider.rating.return_value = (3, "musicbrainz")
+    def test_unrated_import_stays_unrated_and_is_not_submitted(self):
         self.job()
         self.run_worker()
-        self.assertEqual(self.nav.writes, [("song1", 3)])
+        self.assertEqual(self.nav.data["song1"]["userRating"], 0)
         self.assertEqual(self.mb.writes, [])
-        self.nav.data["song1"]["userRating"] = 5
+        self.assertFalse((self.root / "jobs/job.json").exists())
+    def test_rated_import_submits_existing_rating_once(self):
+        self.nav.data["song1"]["userRating"] = 4
+        self.job()
+        self.run_worker()
+        self.run_worker(now=1011)
+        self.assertEqual(self.votes(), [80])
+        self.assertEqual(self.nav.data["song1"]["userRating"], 4)
+    def test_observation_baseline_then_change_and_clear(self):
+        self.nav.data["song1"]["userRating"] = 2
+        self.run_worker()
+        self.assertEqual(self.mb.writes, [])
+        self.nav.data["song1"]["userRating"] = 4
         self.run_worker(now=1011)
         self.nav.data["song1"]["userRating"] = 0
         self.run_worker(now=1022)
         self.run_worker(now=1033)
-        self.assertEqual(self.submitted_values(), [100, 0])
-        self.assertEqual(self.provider.rating.call_count, 1)
-
-    def test_clearing_musicbrainz_derived_rating_does_not_withdraw_unknown_vote(self):
-        self.provider.rating.return_value = (3, "musicbrainz")
-        self.job()
-        self.run_worker()
-        self.nav.data["song1"]["userRating"] = 0
-        self.run_worker(now=1011)
-        self.assertEqual(self.mb.writes, [])
-
-    def test_existing_ratings_baseline_then_changes_submit_without_overwrite(self):
-        self.nav.data["song1"]["userRating"] = 2
-        self.job()
-        self.run_worker()
-        self.assertEqual(self.mb.writes, [])
-        self.assertEqual(self.nav.writes, [])
-        self.provider.rating.assert_not_called()
-        self.nav.data["song1"]["userRating"] = 4
-        self.run_worker(now=1011)
-        self.assertEqual(self.submitted_values(), [80])
-
-    def test_rating_changed_between_scan_and_write_is_preserved(self):
-        self.job()
-        self.nav.get_song = lambda song_id: {**self.nav.data[song_id], "userRating": 5}
-        self.run_worker()
-        self.assertEqual(self.nav.writes, [])
-        self.assertEqual(self.submitted_values(), [100])
-
-    def test_waits_for_subsonic_scan(self):
-        self.nav.data = {}
-        self.job()
-        self.run_worker()
-        self.assertTrue((self.root / "jobs/job.json").exists())
-        self.nav.data["song1"] = copy.deepcopy(SONG)
-        self.run_worker(now=1001)
-        self.assertEqual(self.submitted_values(), [80])
-
-    def test_submission_failure_retains_pending_value_for_periodic_retry(self):
+        self.assertEqual(self.votes(), [80, 0])
+    def test_explicit_library_pass_submits_existing_positive_ratings(self):
+        self.nav.data["song1"]["userRating"] = 3
+        self.run_worker(backfill=True)
+        self.run_worker(now=1011, backfill=True)
+        self.assertEqual(self.votes(), [60])
+    def test_failed_submission_retries_without_subsonic_changes(self):
+        self.nav.data["song1"]["userRating"] = 5
         self.mb.fail = True
-        self.job()
-        self.assertEqual(self.run_worker(), 1)
+        self.assertEqual(self.run_worker(backfill=True), 1)
         self.mb.fail = False
         self.run_worker(now=1011)
-        self.assertEqual(self.submitted_values(), [80])
-        self.assertEqual(self.nav.writes, [("song1", 4)])
-
-    def test_missing_song_and_failed_scan_do_not_withdraw(self):
-        self.job()
-        self.run_worker()
-        self.nav.data = {}
-        self.run_worker(now=1011)
-        self.assertEqual(self.submitted_values(), [80])
-        self.nav.fail = True
+        self.assertEqual(self.votes(), [100])
+        self.assertEqual(self.nav.data["song1"]["userRating"], 5)
+    def test_failed_scan_never_withdraws_a_vote(self):
+        self.nav.data["song1"]["userRating"] = 3
+        self.run_worker(backfill=True)
+        self.nav.songs = Mock(side_effect=RuntimeError("scan failed"))
         with self.assertRaises(RuntimeError):
-            self.run_worker(now=1022)
-        self.assertEqual(self.submitted_values(), [80])
-
-    def test_lost_musicbrainz_generated_write_response_keeps_provenance(self):
-        self.provider.rating.return_value = (3, "musicbrainz")
-        self.nav.lost_response = True
-        self.job()
-        self.assertEqual(self.run_worker(), 1)
-        self.nav.lost_response = False
-        self.run_worker(now=1001)
+            self.run_worker(now=1011)
+        self.assertEqual(self.votes(), [60])
+    def test_removed_song_never_withdraws_a_vote(self):
+        self.nav.data["song1"]["userRating"] = 3
+        self.run_worker(backfill=True)
+        self.nav.data.clear()
+        self.run_worker(now=1011)
+        self.assertEqual(self.votes(), [60])
+    def test_conflicting_duplicate_recording_ratings_are_not_submitted(self):
+        self.nav = FakeSubsonic({**SONG, "userRating": 3}, {**SONG, "id": "song2", "userRating": 4})
+        self.run_worker(backfill=True)
         self.assertEqual(self.mb.writes, [])
-        self.assertEqual(self.nav.writes, [("song1", 3)])
-        self.assertEqual(self.state()["songs"]["song1"]["source"], "musicbrainz")
-
-    def test_library_provider_failure_retries_without_an_import_job(self):
-        self.provider.rating.side_effect = RuntimeError("Unavailable")
-        self.assertEqual(self.run_worker(backfill=True), 1)
-        self.provider.rating.side_effect = None
+    def test_account_specific_history_is_preserved(self):
+        self.nav.data["song1"]["userRating"] = 3
+        self.run_worker(backfill=True)
+        helper.run_worker(self.root, self.nav, self.mb, submit=True, account="other", interval=10, now=1011)
+        self.assertEqual(self.votes(), [60, 60])
+        self.assertEqual(len(list(self.root.glob("submitted-*.json"))), 2)
+    def test_pending_old_generation_is_not_resumed(self):
+        helper.genres.write_json(self.root / "state.json", {"version": 1, "last_scan": 0, "songs": {
+            "song1": {"recording": RECORDING, "observed": 0, "source": "unverified",
+                      "initialized": False, "pending_generation": {"value": 4, "source": "lastfm"},
+                      "retry_track": TRACK}}})
+        self.run_worker()
+        self.assertEqual(self.nav.data["song1"]["userRating"], 0)
+        self.assertEqual(self.mb.writes, [])
+        self.assertNotIn("pending_generation", self.state()["songs"]["song1"])
+    def test_known_musicbrainz_derived_rating_is_not_automatically_resubmitted(self):
+        self.nav.data["song1"]["userRating"] = 3
+        helper.genres.write_json(self.root / "state.json", {"version": 1, "last_scan": 0, "songs": {
+            "song1": {"recording": RECORDING, "observed": 3, "source": "musicbrainz", "initialized": True}}})
+        self.run_worker(backfill=True)
+        self.assertEqual(self.mb.writes, [])
+        self.nav.data["song1"]["userRating"] = 4
         self.run_worker(now=1011)
-        self.assertEqual(self.submitted_values(), [80])
-
-    def test_different_accounts_have_independent_submission_ledgers(self):
+        self.assertEqual(self.votes(), [80])
+    def test_import_rechecks_current_rating(self):
         self.job()
+        self.nav.get_song = lambda _: {**SONG, "userRating": 5}
         self.run_worker()
-        helper.run_worker(self.root, self.nav, self.provider, self.mb,
-                          submit=True, account="other-account", interval=1, now=1011)
-        self.assertEqual(self.submitted_values(), [80, 80])
-
-    def test_conflicting_copies_of_same_recording_are_not_submitted(self):
+        self.assertEqual(self.votes(), [100])
+    def test_conflicting_import_identity_retains_job(self):
         self.job()
+        self.nav.get_song = lambda _: {**SONG, "musicBrainzId": OTHER, "userRating": 5}
         self.run_worker()
-        self.nav.data["song2"] = {**SONG, "id": "song2", "userRating": 2}
-        self.nav.data["song1"]["userRating"] = 5
-        self.run_worker(now=1011)
-        self.assertEqual(self.submitted_values(), [80])
-
-    def test_average_rating_is_never_a_personal_rating(self):
-        self.assertEqual(helper.stars({"averageRating": 5, "rating": 4}), 0)
-        self.assertEqual(helper.stars({"userRating": "3"}), 3)
-        with self.assertRaises(ValueError):
-            helper.stars({"userRating": 6})
-
-    def test_identity_match_rejects_ambiguous_songs_and_wrong_recordings(self):
-        self.assertEqual(helper.find_song(TRACK, {"1": SONG}), SONG)
-        self.assertIsNone(helper.find_song(TRACK, {"1": SONG, "2": {**SONG, "id": "song2"}}))
-        self.assertIsNone(helper.find_song(TRACK, {"1": {**SONG, "musicBrainzId": OTHER}}))
-        self.assertIsNone(helper.find_song(TRACK, {"1": {**SONG, "path": "elsewhere.flac", "title": "Song (Live)"}}))
-
-    def test_no_rating_remains_unrated_and_explicit_library_can_recheck(self):
-        self.provider.rating.return_value = None
-        self.job()
-        self.run_worker()
-        self.assertEqual(self.nav.writes, [])
-        self.provider.rating.return_value = (3, "lastfm")
-        self.run_worker(now=1011, backfill=True)
-        self.assertEqual(self.submitted_values(), [60])
-
-    def test_interval_avoids_unnecessary_full_scans(self):
+        self.assertEqual(self.mb.writes, [])
+        self.assertTrue((self.root / "jobs/job.json").exists())
+    def test_periodic_scan_interval(self):
         self.run_worker()
         self.run_worker(now=1001)
         self.assertEqual(self.nav.scans, 1)
         self.assertEqual(helper.interval_seconds("15m"), 900)
         with self.assertRaises(ValueError):
             helper.interval_seconds("0m")
+    def test_submission_disabled_preserves_observed_state(self):
+        self.nav.data["song1"]["userRating"] = 3
+        helper.run_worker(self.root, self.nav, self.mb, submit=False, backfill=True, now=1000)
+        self.assertEqual(self.mb.writes, [])
+        self.run_worker(now=1011)
+        self.assertEqual(self.votes(), [60])
+    def test_shared_submission_builder_handles_all_entities(self):
+        body=ratings.build_submission([("artist", RECORDING, 40), ("release-group", RECORDING, 60), ("recording", RECORDING, 80)])
+        tree=ET.fromstring(body)
+        self.assertEqual([int(n.text) for n in tree.findall(".//{*}user-rating")], [40, 80, 60])
+        self.assertEqual(ET.fromstring(helper.rating_xml(RECORDING, 4)).find(".//{*}user-rating").text, "80")
+    def test_subsonic_client_is_read_only_and_uses_personal_stars(self):
+        self.assertFalse(hasattr(helper.Subsonic, "set_rating"))
+        self.assertEqual(helper.stars({"userRating": 2, "averageRating": 5}), 2)
+        self.assertEqual(helper.stars({"averageRating": 5}), 0)
+    def test_musicbrainz_generated_import_is_not_submitted_back(self):
+        self.nav.data["song1"]["userRating"] = 4
+        self.job()
+        provenance = {"song1": {"value": 4, "source": "musicbrainz", "recording": RECORDING, "updated": 900}}
+        self.run_worker(generated_ratings=provenance)
+        self.assertEqual(self.votes(), [])
+        self.assertEqual(self.state()["songs"]["song1"]["source"], "musicbrainz")
+        self.run_worker(now=2000, backfill=True, generated_ratings=provenance)
+        self.assertEqual(self.votes(), [])
 
-    def test_musicbrainz_provider_uses_exact_recording_not_title_search(self):
-        mb = Mock()
-        mb.request.return_value = {"rating": {"value": 3.8}}
-        provider = helper.RatingProvider(mb)
-        self.assertEqual(provider.rating(TRACK), (4, "musicbrainz"))
-        mb.request.assert_called_once_with(f"recording/{RECORDING}", inc="ratings")
-        mb.request.return_value = {"rating": None}
-        self.assertIsNone(provider.rating(TRACK))
+    def test_other_generated_sources_submit_and_personal_changes_take_precedence(self):
+        provenance = {"song1": {"value": 4, "source": "lastfm", "recording": RECORDING, "updated": 900}}
+        self.nav.data["song1"]["userRating"] = 4
+        self.run_worker(generated_ratings=provenance)
+        self.assertEqual(self.votes(), [80])
+        self.nav.data["song1"]["userRating"] = 3
+        self.run_worker(now=2000, generated_ratings=provenance)
+        self.assertEqual(self.votes(), [80, 60])
+        self.nav.data["song1"]["userRating"] = 4
+        self.run_worker(now=3000, generated_ratings=provenance)
+        self.assertEqual(self.votes(), [80, 60, 80])
+        self.assertEqual(self.state()["songs"]["song1"]["source"], "subsonic-change")
 
-    def test_lastfm_scoring_and_version_checks(self):
-        self.assertEqual(score_lastfm(1000000, 10000000, 1), 5)
-        self.assertLessEqual(score_lastfm(100, 1000, 100), 3)
-        provider = helper.RatingProvider(Mock(), "fake-key")
-        provider.lastfm = Mock(return_value={"track": {"name": "Song (Live)", "artist": {"name": "Artist"}}})
-        self.assertIsNone(provider.rating(TRACK))
-        provider.lastfm.return_value = {"track": {"name": "Song", "artist": {"name": "Artist"}, "mbid": OTHER}}
-        self.assertIsNone(provider.rating(TRACK))
+    def test_provenance_for_another_recording_does_not_change_source(self):
+        self.nav.data["song1"]["userRating"] = 4
+        provenance = {"song1": {"value": 4, "source": "lastfm", "recording": OTHER, "updated": 900}}
+        self.run_worker(generated_ratings=provenance)
+        self.assertEqual(self.votes(), [])
+        self.assertEqual(self.state()["songs"]["song1"]["source"], "unverified")
 
-    def test_lastfm_verified_track_and_artist_rank_generate_stars(self):
-        provider = helper.RatingProvider(Mock(), "fake-key")
-        def api(method, **params):
-            if method == "track.getInfo":
-                return {"track": {"name": "Song", "artist": {"name": "Artist"}, "mbid": RECORDING,
-                                  "listeners": "1000000", "playcount": "10000000"}}
-            return {"toptracks": {"track": [{"name": "Song", "listeners": "1000000", "playcount": "10000000"}]}}
-        provider.lastfm = Mock(side_effect=api)
-        self.assertEqual(provider.rating(TRACK), (5, "lastfm"))
-        self.assertEqual(provider.lastfm.call_args_list[0].kwargs["mbid"], RECORDING)
+    def test_helper_imports_with_sonicratings_unavailable(self):
+        code="""import importlib.abc,sys
+class Block(importlib.abc.MetaPathFinder):
+ def find_spec(self,fullname,path=None,target=None):
+  if fullname.startswith('sonicratings'): raise ModuleNotFoundError(fullname)
+sys.meta_path.insert(0,Block())
+sys.path.insert(0,sys.argv[1])
+from musicbrainz_helper import ratings,ratings_worker,musicbrainz_genres
+"""
+        result=subprocess.run([sys.executable,"-I","-c",code,str(Path(__file__).parents[1])],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_identity_match_rejects_ambiguous_songs_and_wrong_recordings(self):
+        self.assertEqual(helper.find_song(TRACK, {"1": SONG}), SONG)
+        self.assertIsNone(helper.find_song(TRACK, {"1": SONG, "2": {**SONG, "id": "song2"}}))
+        self.assertIsNone(helper.find_song(TRACK, {"1": {**SONG, "musicBrainzId": OTHER}}))
+        self.assertIsNone(helper.find_song(TRACK, {"1": {**SONG, "path": "elsewhere.flac", "title": "Song (Live)"}}))
 
     def test_subsonic_uses_salted_auth_and_checks_api_errors(self):
         nav = helper.Subsonic("https://example.test/music", "user", "fake-secret")
@@ -321,11 +287,10 @@ class RatingsTests(unittest.TestCase):
             "song1": {"recording": RECORDING, "observed": 4, "initialized": True,
                       "source": "navidrome-change", "updated": 900}}})
         self.run_worker()
-        self.assertEqual(self.submitted_values(), [80])
+        self.assertEqual(self.votes(), [80])
         self.nav.data["song1"]["userRating"] = 5
         self.run_worker(now=1011)
         self.assertEqual(self.state()["songs"]["song1"]["source"], "subsonic-change")
-
 
 if __name__ == "__main__":
     unittest.main()

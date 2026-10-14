@@ -6,12 +6,7 @@ import unittest
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).parents[1] / "itunes-library-helper.py"
-SPEC = importlib.util.spec_from_file_location("itunes_library_helper", SCRIPT)
-helper = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = helper
-SPEC.loader.exec_module(helper)
+from musicbrainz_helper import itunes_library as helper
 
 
 class ItunesLibraryHelperTests(unittest.TestCase):

@@ -31,8 +31,10 @@ init(autoreset=False)
 
 MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
 MUSICBRAINZ_XML_NS = "http://musicbrainz.org/ns/mmd-2.0#"
-CLIENT_NAME = "musicbrainz-ratings-helper-0.1.1"
-SCRIPT_VERSION = "v0.1.1"
+from . import __version__
+from .musicbrainz import load_dotenv as load_dotenv_file
+CLIENT_NAME = "musicbrainz-helper/" + __version__
+SCRIPT_VERSION = __version__
 NAVIDROME_REQUEST_TIMEOUTS = [10, 20, 30, 45, 60]
 NAVIDROME_RETRY_DELAYS = [5, 10, 15, 20, 30]
 MUSICBRAINZ_RETRY_DELAYS = [3, 10, 30, 60, 120]
@@ -61,8 +63,6 @@ class SafeAsciiFormatter(logging.Formatter):
 
 # Setup logs (match sptnr logging behavior)
 LOG_DIR = "logs"
-if not os.path.exists(LOG_DIR):
-    os.makedirs(LOG_DIR)
 
 LOGFILE = os.path.join(LOG_DIR, f"musicbrainz-ratings-helper_{int(time.time())}.log")
 
@@ -191,7 +191,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mb-password",
         default=None,
-        help="MusicBrainz password. Defaults to MB_PASSWORD.",
+        help="MusicBrainz application token. Defaults to MB_TOKEN (legacy MB_PASSWORD).",
     )
     parser.add_argument(
         "--log-level",
@@ -203,32 +203,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_dotenv_file(path: str = ".env") -> None:
-    """Load simple KEY=VALUE pairs from a local .env file."""
-    if not os.path.exists(path):
-        return
-
-    with open(path, "r", encoding="utf-8") as env_file:
-        for line in env_file:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip()
-            if not key:
-                continue
-            if (
-                len(value) >= 2
-                and value[0] == value[-1]
-                and value[0] in {"'", '"'}
-            ):
-                value = value[1:-1]
-            os.environ.setdefault(key, value)
 
 
 def normalize_text(value: str | None) -> str:
     return " ".join((value or "").strip().lower().split())
+
+
+def normalized(value):
+    import unicodedata
+    return " ".join(unicodedata.normalize("NFKC", str(value)).casefold().split())
 
 
 def rating_to_musicbrainz(value: int) -> int:
@@ -1302,9 +1285,10 @@ def flush_and_count(
     )
 
 
-def main() -> int:
+def standalone_main() -> int:
     args = parse_args()
     load_dotenv_file()
+    os.makedirs(LOG_DIR, exist_ok=True)
 
     # Start time for run duration reporting
     start_time = time.time()
@@ -1324,13 +1308,13 @@ def main() -> int:
     except Exception:
         pass
 
-    logging.info(f"Version: musicbrainz-ratings-helper {SCRIPT_VERSION}")
+    logging.info(f"Version: musicbrainz-ratings {SCRIPT_VERSION}")
     if args.dry_run:
         logging.info("Preview mode, no changes will be made.")
 
     force_artist_ratings_mode = bool(args.force_artist_ratings)
     mb_username = args.mb_username or os.environ.get("MB_USERNAME")
-    mb_password = args.mb_password or os.environ.get("MB_PASSWORD")
+    mb_password = args.mb_password or os.environ.get("MB_TOKEN") or os.environ.get("MB_PASSWORD")
 
     default_entities = ["album"] if force_artist_ratings_mode else (["song", "album"] if args.start_album_id else ["song", "album", "artist"])
     entities = set(args.entity or default_entities)
@@ -1489,6 +1473,15 @@ def main() -> int:
     )
 
     return 0
+
+
+def main() -> int:
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] in {"enqueue", "work", "library"}:
+        load_dotenv_file()
+        from .ratings_worker import main as sync_main
+        return sync_main()
+    return standalone_main()
 
 
 if __name__ == "__main__":

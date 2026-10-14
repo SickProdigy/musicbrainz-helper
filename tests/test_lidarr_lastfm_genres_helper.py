@@ -8,17 +8,12 @@ from unittest.mock import Mock
 import requests
 
 
-SCRIPT = Path(__file__).parents[1] / "lidarr-lastfm-genres-helper.py"
-SPEC = importlib.util.spec_from_file_location("lidarr_lastfm_genres_helper", SCRIPT)
-helper = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = helper
-SPEC.loader.exec_module(helper)
+from musicbrainz_helper import lastfm_genres as helper
 
 
 class LidarrLastFmGenresHelperTests(unittest.TestCase):
     def test_musicbrainz_user_agent_identifies_name_and_version(self):
-        self.assertEqual(helper.CLIENT, "musicbrainz-helper/0.2")
+        self.assertEqual(helper.CLIENT, "musicbrainz-helper/0.4.0")
 
     def test_filters_ranked_tags_to_musicbrainz_genres(self):
         tags = [

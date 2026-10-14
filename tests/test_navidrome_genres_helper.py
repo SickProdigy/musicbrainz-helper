@@ -9,12 +9,7 @@ from unittest.mock import Mock, patch
 import requests
 
 
-SCRIPT = Path(__file__).parents[1] / "navidrome-genres-helper.py"
-SPEC = importlib.util.spec_from_file_location("navidrome_genres_helper", SCRIPT)
-helper = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = helper
-SPEC.loader.exec_module(helper)
+from musicbrainz_helper import navidrome_genres as helper
 
 
 class NavidromeGenresHelperTests(unittest.TestCase):

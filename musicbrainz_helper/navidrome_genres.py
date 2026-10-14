@@ -23,7 +23,7 @@ from requests.auth import HTTPDigestAuth
 
 MB_BASE = "https://musicbrainz.org/ws/2"
 MB_NS = "http://musicbrainz.org/ns/mmd-2.0#"
-CLIENT = "musicbrainz-helper/0.2"
+from .musicbrainz import CLIENT, normalized, JsonCache, MusicBrainzClient, submission_xml, load_dotenv
 ENTITY_LISTS = {
     "artist": "artist-list",
     "release-group": "release-group-list",
@@ -40,21 +40,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--artist-id", help="Limit processing to one Navidrome artist ID.")
     parser.add_argument("--max-albums", type=int, help="Limit albums for a short or resumable run.")
     parser.add_argument("--max-tags", type=int, default=7, help="Maximum genres per MusicBrainz entity.")
-    parser.add_argument("--output-dir", type=Path, default=Path("navidrome-genre-reports"))
+    parser.add_argument("--output-dir", type=Path, default=Path("logs/navidrome-genre-reports"))
     parser.add_argument("--submit", action="store_true", help="Submit the generated genre upvotes.")
     parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default="INFO")
     return parser.parse_args()
-
-
-def load_dotenv(path: Path = Path(".env")) -> None:
-    if not path.is_file():
-        return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def required_env(name: str) -> str:
@@ -62,11 +51,6 @@ def required_env(name: str) -> str:
     if not value:
         raise SystemExit(f"{name} is required in .env or the environment.")
     return value
-
-
-def normalized(value: str) -> str:
-    folded = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
-    return re.sub(r"[^a-z0-9]+", "", folded.casefold())
 
 
 def item_genres(item: dict) -> list[str]:
@@ -80,20 +64,6 @@ def item_genres(item: dict) -> list[str]:
         if value.strip():
             values.append(value.strip())
     return list(dict.fromkeys(values))
-
-
-class JsonCache:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-
-    def get(self, namespace: str, key: str):
-        return self.data.get(namespace, {}).get(key)
-
-    def put(self, namespace: str, key: str, value) -> None:
-        self.data.setdefault(namespace, {})[key] = value
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
 
 
 class NavidromeClient:
@@ -158,71 +128,6 @@ class NavidromeClient:
             offset += len(page)
 
 
-class MusicBrainzClient:
-    def __init__(self, cache: JsonCache, username: str = "", password: str = "") -> None:
-        contact = os.getenv("MB_CONTACT", "https://github.com/SickProdigy/musicbrainz-helper")
-        self.cache = cache
-        self.session = requests.Session()
-        self.session.headers.update({"User-Agent": f"{CLIENT} ({contact})", "Accept": "application/json"})
-        if username and password:
-            self.session.auth = HTTPDigestAuth(username, password)
-        self.next_request = 0.0
-
-    def request(self, endpoint: str, **params) -> dict:
-        for delay in (1, 3, 10, 0):
-            wait = self.next_request - time.monotonic()
-            if wait > 0:
-                time.sleep(wait)
-            self.next_request = time.monotonic() + 1.1
-            response = self.session.get(
-                f"{MB_BASE}/{endpoint}", params={"fmt": "json", **params}, timeout=45
-            )
-            if response.status_code in {429, 500, 502, 503, 504} and delay:
-                time.sleep(int(response.headers.get("Retry-After", delay)))
-                continue
-            response.raise_for_status()
-            return response.json()
-        raise RuntimeError(f"MusicBrainz request failed: {endpoint}")
-
-    def genres(self) -> dict[str, str]:
-        cached = self.cache.get("musicbrainz", "genres-v2")
-        if cached is None:
-            cached = []
-            offset = 0
-            while True:
-                payload = self.request("genre/all", limit=100, offset=offset)
-                batch = [row["name"] for row in payload.get("genres", [])]
-                cached.extend(batch)
-                offset += len(batch)
-                if not batch or offset >= int(payload.get("genre-count", offset)):
-                    break
-            self.cache.put("musicbrainz", "genres-v2", cached)
-        return {normalized(name): name for name in cached}
-
-    def release_group_mbid(self, release_mbid: str) -> str:
-        cached = self.cache.get("release-groups-by-release", release_mbid)
-        if cached is not None:
-            return str(cached)
-        payload = self.request(f"release/{release_mbid}", inc="release-groups")
-        mbid = str((payload.get("release-group") or {}).get("id", ""))
-        self.cache.put("release-groups-by-release", release_mbid, mbid)
-        return mbid
-
-    def submit(self, body: bytes) -> None:
-        wait = self.next_request - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        self.next_request = time.monotonic() + 1.1
-        response = self.session.post(
-            f"{MB_BASE}/tag",
-            params={"client": CLIENT},
-            data=body,
-            headers={"Content-Type": "application/xml; charset=utf-8"},
-            timeout=60,
-        )
-        response.raise_for_status()
-
-
 def accepted_genres(values: list[str], vocabulary: dict[str, str], unmatched: Counter) -> list[str]:
     accepted: list[str] = []
     for value in values:
@@ -261,24 +166,6 @@ def ranked_rows(targets: dict[tuple[str, str], dict], max_tags: int) -> list[dic
         rows.append({**row, "genres": genres, "sources": sorted(row["sources"])})
         rows[-1].pop("counts")
     return sorted(rows, key=lambda row: (row["entity"], row["artist"].casefold(), row["name"].casefold(), row["mbid"]))
-
-
-def submission_xml(rows: list[dict]) -> bytes:
-    root = ET.Element("metadata", {"xmlns": MB_NS})
-    grouped = defaultdict(list)
-    for row in rows:
-        grouped[row["entity"]].append(row)
-    for entity, list_name in ENTITY_LISTS.items():
-        if not grouped[entity]:
-            continue
-        entity_list = ET.SubElement(root, list_name)
-        for row in grouped[entity]:
-            item = ET.SubElement(entity_list, entity, {"id": row["mbid"]})
-            tag_list = ET.SubElement(item, "user-tag-list")
-            for genre in row["genres"]:
-                user_tag = ET.SubElement(tag_list, "user-tag", {"vote": "upvote"})
-                ET.SubElement(user_tag, "name").text = genre
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
 def write_reports(output_dir: Path, rows: list[dict], unmatched: Counter, summary: dict) -> None:

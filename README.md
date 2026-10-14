@@ -1,59 +1,82 @@
 # MusicBrainz Helper
 
-Tools for contributing personal ratings and missing Apple Music catalog data to
+Tools for contributing ratings, genres, and missing Apple Music catalog data to
 MusicBrainz with reviewable, rate-limited workflows.
 
-The project currently keeps each job in its own script:
+Install once, then choose the command for your task. Each command links to its usage examples; each script link opens its implementation.
 
-- `musicbrainz-ratings-helper.py` pushes Navidrome ratings to existing
-  MusicBrainz entities.
-- `musicbrainz-new-artist-helper.py` discovers an Apple Music artist catalog,
-  checks MusicBrainz for possible duplicates, and generates prefilled editor
-  forms for missing releases.
-- `itunes-library-helper.py` extracts ratings, genres, artists, and playlist
-  membership from iTunes library and playlist exports into reviewable reports.
-- `lidarr-lastfm-genres-helper.py` maps Last.fm genres onto MusicBrainz artists,
-  release groups, every release version, and recordings from a Lidarr catalog.
-- `navidrome-genres-helper.py` contributes genres already embedded in a
-  Navidrome library to matching MusicBrainz entities.
-- `lidarr-discogs-genres-helper.py` records the safe matching and contribution
-  plan for a future Discogs-backed genre helper. It is currently a non-networked
-  scaffold and cannot submit data.
+| Command and usage | What it does | Script |
+| --- | --- | --- |
+| [musicbrainz-ratings](#ratings-helper) | Contributes Navidrome/Subsonic artist, album, and song ratings; optionally derives Last.fm recording ratings. | [ratings.py](musicbrainz_helper/ratings.py) |
+| [musicbrainz-genres](#imported-lidarr-genres) | Queues embedded genres from Lidarr imports or a library scan and contributes them to MusicBrainz. | [musicbrainz_genres.py](musicbrainz_helper/musicbrainz_genres.py) |
+| [musicbrainz-new-artist](#apple-music-artist-helper) | Finds Apple Music catalog entries missing from MusicBrainz and creates review pages with prefilled editor forms. | [new_artist.py](musicbrainz_helper/new_artist.py) |
+| [musicbrainz-itunes-library](#itunes-library-helper) | Reads iTunes exports, writes reports, and optionally contributes matched ratings and genres. | [itunes_library.py](musicbrainz_helper/itunes_library.py) |
+| [musicbrainz-lastfm-genres](#lidarr-lastfm-genre-helper) | Looks up Last.fm genres for albums known to Lidarr, including wanted/missing albums. | [lastfm_genres.py](musicbrainz_helper/lastfm_genres.py) |
+| [musicbrainz-navidrome-genres](#navidrome-genre-helper) | Contributes genres already present in a Navidrome library. | [navidrome_genres.py](musicbrainz_helper/navidrome_genres.py) |
 
-## Planned Genre Sources
+## Setup and repository layout
 
-Run the staged Discogs design summary with:
+Requires Python 3.10 or newer. Run these commands from this repository.
+
+Linux:
 
 ```bash
-python lidarr-discogs-genres-helper.py
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+cp .env.example .env
 ```
 
-Discogs is the next implementation target. Release and master `genres` and
-`styles` can contribute to MusicBrainz artists, release groups, and releases.
-Matching should prefer an existing Discogs URL relationship, then barcode or
-catalog-number evidence; name-only search results must remain review-only.
-Release-level metadata must not be copied onto recordings.
+Windows PowerShell:
 
-Spotify is a later candidate for artist and album enrichment and for identity
-evidence through UPC and ISRC values. Its album genre field is not consistently
-populated, and track metadata should not be treated as a source of genres.
-Every provider should retain its own cache, match report, checkpoints, and
-submission ledger so sources can be reviewed and rerun independently.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
+Copy-Item .env.example .env
+```
+
+Copy the example only when first setting up; keep an existing `.env`. Configure the sources you use in [.env.example](.env.example). Activate the environment again in a new terminal. Editable installation makes the commands use your local source changes immediately.
+
+Run manual commands from this repository so they find `.env` and write output under `logs/`. Use `--help` for any tool, such as `musicbrainz-ratings --help` or `musicbrainz-ratings library --help`.
+
+```text
+musicbrainz-helper/
+  musicbrainz_helper/    tool implementations and shared MusicBrainz utilities
+  tests/                tests for the package
+  logs/                 generated logs, reports, and standalone checkpoints
+  pyproject.toml        installation and command definitions
+```
+
+All tools live in `musicbrainz_helper/`. You can also run a module directly from the checkout, for example `python -m musicbrainz_helper.navidrome_genres --help`, after installing its dependencies. There are no root script wrappers.
+
+Choose the command for the job you want. Source-specific matching stays in each tool; shared MusicBrainz API and submission utilities live in [musicbrainz.py](musicbrainz_helper/musicbrainz.py). The iTunes tool keeps ratings and genres together because both come from the same export.
+
+Queue-based tools use **subcommands**: `musicbrainz-genres enqueue`, `scan`, or `work`; `musicbrainz-ratings enqueue`, `library`, or `work`. Options such as `--submit` and `--rating-source lastfm` select behavior within that workflow. Each command's `--help` lists its required arguments.
+
+SonicRatings writes ratings to Navidrome/Subsonic. This repository gathers ratings and genres from supported sources and contributes them to MusicBrainz; it does not write ratings to Subsonic or require SonicRatings to be installed.
+
+
+## Planned sources
+
+Discogs genre contributions and Spotify enrichment are future work; they are not
+available commands. Discogs release genres would apply to albums/releases, not
+be assumed to describe every recording.
 
 ## Navidrome Genre Helper
 
 Preview genre upvotes from five Navidrome albums:
 
 ```bash
-python navidrome-genres-helper.py --max-albums 5
+musicbrainz-navidrome-genres --max-albums 5
 ```
 
 The preview writes `genres.csv`, `unmatched-genres.csv`,
-`musicbrainz-tags.xml`, and `summary.json` under `navidrome-genre-reports/`.
+`musicbrainz-tags.xml`, and `summary.json` under `logs/navidrome-genre-reports/`.
 Nothing is posted without `--submit`. Review the CSV and then submit with:
 
 ```bash
-python navidrome-genres-helper.py --submit
+musicbrainz-navidrome-genres --submit
 ```
 
 The helper reads both the legacy single `genre` field and OpenSubsonic's
@@ -71,26 +94,26 @@ Set `NAVIDROME_BASE_URL`, `NAVIDROME_USERNAME`, and `NAVIDROME_PASSWORD` in
 Preview genre upvotes for Lidarr's wanted/missing albums (the default):
 
 ```bash
-python lidarr-lastfm-genres-helper.py
+musicbrainz-lastfm-genres
 ```
 
 Process every album known to Lidarr instead:
 
 ```bash
-python lidarr-lastfm-genres-helper.py --scope all
+musicbrainz-lastfm-genres --scope all
 ```
 
 Process only albums that are not currently wanted/missing:
 
 ```bash
-python lidarr-lastfm-genres-helper.py --scope present
+musicbrainz-lastfm-genres --scope present
 ```
 
-After reviewing `lidarr-lastfm-genre-reports/genres.csv` and
+After reviewing `logs/lidarr-lastfm-genre-reports/genres.csv` and
 `musicbrainz-tags.xml`, submit the upvotes with:
 
 ```bash
-python lidarr-lastfm-genres-helper.py --submit
+musicbrainz-lastfm-genres --submit
 ```
 
 Set `LIDARR_URL`, `LIDARR_API_KEY`, and `LASTFM_API_KEY` in `.env`. MusicBrainz
@@ -110,7 +133,7 @@ updated in the output directory. Restart an interrupted run with `--resume`;
 already completed albums and accepted entity/genre votes are skipped:
 
 ```bash
-python lidarr-lastfm-genres-helper.py --scope missing --submit --resume
+musicbrainz-lastfm-genres --scope missing --submit --resume
 ```
 
 Preview and submission progress are intentionally separate, so a reviewed
@@ -132,17 +155,17 @@ transient failures, and split down to individual votes when a batch is rejected.
 Export an iTunes XML library without modifying iTunes or MusicBrainz:
 
 ```bash
-python itunes-library-helper.py "/path/to/Library.xml"
+musicbrainz-itunes-library "/path/to/Library.xml"
 ```
 
 Tab-separated playlist exports are supported too:
 
 ```bash
-python itunes-library-helper.py "/path/to/playlist.txt" \
-  --output-dir itunes-library-reports/playlist
+musicbrainz-itunes-library "/path/to/playlist.txt" \
+  --output-dir logs/itunes-library-reports/playlist
 ```
 
-The output includes `tracks.csv`, explicitly rated tracks in `ratings.csv`,
+Reports default to `logs/itunes-library-reports/`. The output includes `tracks.csv`, explicitly rated tracks in `ratings.csv`,
 loved/disliked flags in `preferences.csv`, artist genre summaries in
 `artists.csv`, genre counts in `genres.csv`, playlist membership in
 `playlist-tracks.csv`, and `summary.json`. The original 0-100 iTunes rating is
@@ -153,13 +176,19 @@ as computed and are not treated as explicit track ratings.
 Preview MusicBrainz matches for explicitly rated tracks:
 
 ```bash
-python itunes-library-helper.py "/path/to/Library.xml" --musicbrainz
+musicbrainz-itunes-library "/path/to/Library.xml" --musicbrainz
 ```
 
 The preview writes accepted, ambiguous, and unmatched CSV files plus the exact
 rating and genre XML payloads. Matches are cached so repeated runs do not repeat
 completed searches. After reviewing accepted matches, submit ratings and genre
-upvotes with `--submit`. Use `--match-scope all` to process genres for the full
+upvotes:
+
+```bash
+musicbrainz-itunes-library "/path/to/Library.xml" --musicbrainz --submit
+```
+
+Use `--match-scope all` to process genres for the full
 library; large exports are intentionally rate-limited and can take a long time.
 
 ## Apple Music Artist Helper
@@ -170,44 +199,46 @@ system instead: it creates a local review page whose buttons open the official
 MusicBrainz release editor with Apple metadata already filled in. The helper
 never submits an edit by itself.
 
+Review pages default to `logs/new-artist-reports/<artist>-apple-music-import.html`; `--output PATH` selects another location.
+
 Preview an Apple Music artist catalog and generate the review page:
 
 ```bash
-python musicbrainz-new-artist-helper.py \
+musicbrainz-new-artist \
   "https://music.apple.com/us/artist/youngvynn-q/6776781654"
 ```
 
 An album URL also works; the helper resolves its credited artist:
 
 ```bash
-python musicbrainz-new-artist-helper.py \
+musicbrainz-new-artist \
   "https://music.apple.com/us/album/he-said-i-looked-fine-single/6803960307"
 ```
 
 Open the generated report automatically:
 
 ```bash
-python musicbrainz-new-artist-helper.py APPLE_URL --open
+musicbrainz-new-artist APPLE_URL --open
 ```
 
 For a short test, process only the newest release:
 
 ```bash
-python musicbrainz-new-artist-helper.py APPLE_URL --max-releases 1 --open
+musicbrainz-new-artist APPLE_URL --max-releases 1 --open
 ```
 
 If the report shows multiple same-name artist candidates, inspect them and
 rerun with the correct MBID instead of creating a duplicate:
 
 ```bash
-python musicbrainz-new-artist-helper.py APPLE_URL \
+musicbrainz-new-artist APPLE_URL \
   --artist-mbid f6879d41-00c4-48c6-90cb-5f0875c973e0 --open
 ```
 
 If the label already exists in MusicBrainz, its MBID can be pinned too:
 
 ```bash
-python musicbrainz-new-artist-helper.py APPLE_URL \
+musicbrainz-new-artist APPLE_URL \
   --artist-mbid ARTIST_MBID --label-mbid LABEL_MBID --open
 ```
 
@@ -252,21 +283,9 @@ For songs, release-group expansion is enabled by default. When a rated Navidrome
 
 It can also run in a direct MusicBrainz force mode. In that mode, it bypasses Navidrome, walks every release group credited to a MusicBrainz artist MBID, and submits one forced release-group rating for each one.
 
-## Setup
+### Ratings configuration
 
-Install dependencies:
-
-```bash
-python3 -m pip install -r requirements.txt
-```
-
-Using a Linux virtual environment is recommended:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
+Use the package installation above.
 
 Create a `.env` or set these environment variables:
 
@@ -276,56 +295,56 @@ NAVIDROME_USERNAME=your-navidrome-username
 NAVIDROME_PASSWORD=your-navidrome-password
 
 MB_USERNAME=your-musicbrainz-username
-MB_PASSWORD=your-musicbrainz-password
+MB_TOKEN=your-musicbrainz-application-token
 ```
 
 The helper automatically reads `.env` from the current project directory.
 
-## Usage
+### Usage
 
 Preview what would be submitted from Navidrome:
 
 ```bash
-python musicbrainz-ratings-helper.py --dry-run
+musicbrainz-ratings --dry-run
 ```
 
 Run for one Navidrome artist:
 
 ```bash
-python musicbrainz-ratings-helper.py --dry-run --artist-id 5YPCM8WgUTYDxJPS8QUuOO
+musicbrainz-ratings --dry-run --artist-id 5YPCM8WgUTYDxJPS8QUuOO
 ```
 
 Resume from a Navidrome artist and continue onward in artist order:
 
 ```bash
-python musicbrainz-ratings-helper.py --start-artist-id 7dB07x8Q2P9jPvGeDHxIFa
+musicbrainz-ratings --start-artist-id 7dB07x8Q2P9jPvGeDHxIFa
 ```
 
 Resume from a Navidrome album and continue onward in album-title order:
 
 ```bash
-python musicbrainz-ratings-helper.py --start-album-id 5WYUQdSkSzSHf4714jsHDM
+musicbrainz-ratings --start-album-id 5WYUQdSkSzSHf4714jsHDM
 ```
 
 Submit Navidrome ratings for real:
 
 ```bash
-python musicbrainz-ratings-helper.py
+musicbrainz-ratings
 ```
 
 Preview forced release-group ratings for one MusicBrainz artist:
 
 ```bash
-python musicbrainz-ratings-helper.py --force-artist-ratings 6b656576-9504-432e-823d-8920139db2f0 --override-rating 1 --max-release-groups 5 --dry-run
+musicbrainz-ratings --force-artist-ratings 6b656576-9504-432e-823d-8920139db2f0 --override-rating 1 --max-release-groups 5 --dry-run
 ```
 
 Submit forced release-group ratings for one MusicBrainz artist:
 
 ```bash
-python musicbrainz-ratings-helper.py --force-artist-ratings 6b656576-9504-432e-823d-8920139db2f0 --override-rating 1
+musicbrainz-ratings --force-artist-ratings 6b656576-9504-432e-823d-8920139db2f0 --override-rating 1
 ```
 
-## Useful Flags
+### Useful Flags
 
 - `--dry-run` previews the same rating batches without posting to MusicBrainz.
 - `--artist-id ID` limits album and song processing to one Navidrome artist.
@@ -341,7 +360,7 @@ python musicbrainz-ratings-helper.py --force-artist-ratings 6b656576-9504-432e-8
 - `--no-expand-release-groups` disables recording fan-out within release groups.
 - `--log-level DEBUG` shows detailed matching and MusicBrainz resolution logs.
 
-## Logging
+### Logging
 
 Normal logs are grouped by artist and album. Rating lines show the Navidrome source rating and the MusicBrainz rating that will be submitted:
 
@@ -367,7 +386,7 @@ Each run also writes a timestamped log file in `logs/`, for example:
 logs/musicbrainz-ratings-helper_1783864011.log
 ```
 
-## Notes
+### Notes
 
 - Navidrome uses 1-5 star ratings. MusicBrainz user ratings use a 0-100 scale, so the helper submits `rating * 20`.
 - Zero or missing ratings are skipped.
@@ -375,17 +394,17 @@ logs/musicbrainz-ratings-helper_1783864011.log
 - MusicBrainz API requests are throttled to about one request per second.
 - Rating submissions are batched into one MusicBrainz POST where possible instead of sending one request per rating.
 - Navidrome access uses the Subsonic API only; the helper does not read the Navidrome database directly.
-# Imported Lidarr genres
+## Imported Lidarr genres
 
-`imported-genres-helper.py` accepts exact-album jobs from arr-scripts, reads
-embedded provider or Beets genres, and reuses the Last.fm helper's MusicBrainz
-release expansion, filtering and submission machinery. It supports singles,
+`musicbrainz-genres` accepts exact-album jobs from arr-scripts, reads
+embedded provider or Beets genres, and uses the shared MusicBrainz
+release expansion, filtering and submission utilities. It supports singles,
 EPs and albums without requiring Beets or Navidrome.
 
 ```bash
-python imported-genres-helper.py enqueue --album-id 123 --queue-dir imported-genre-jobs
-python imported-genres-helper.py work --queue-dir imported-genre-jobs
-python imported-genres-helper.py work --queue-dir imported-genre-jobs --credentials-file .env --submit
+musicbrainz-genres enqueue --album-id 123 --queue-dir logs/imported-genre-jobs --credentials-file .env
+musicbrainz-genres work --queue-dir logs/imported-genre-jobs --credentials-file .env
+musicbrainz-genres work --queue-dir logs/imported-genre-jobs --credentials-file .env --submit
 ```
 
 Enqueue uses `LIDARR_URL` and `LIDARR_API_KEY` from the environment (or an explicit
@@ -402,15 +421,14 @@ Submission ledgers are account-specific. One locked worker handles MusicBrainz
 requests serially; failed jobs remain available for retry. Run `work` again to
 retry or schedule it. The arr-scripts integration polls every minute.
 
-See `/sickprodigy/arr-scripts`, `lidarr/musicbrainz-genres.md`, for installation
-and settings. Final embedded tags represent the user's selected genres; source
+See the [arr-scripts genre setup guide](https://github.com/SickProdigy/arr-scripts/blob/main/lidarr/musicbrainz-genres.md) for installation and settings. Final embedded tags represent the user's selected genres; source
 labels describe the processing path and do not imply independent provider votes.
 
 For a whole-library genre export and contribution pass:
 
 ```bash
-python imported-genres-helper.py scan --queue-dir imported-genre-jobs --profile sickprodigy --credentials-file .env
-python imported-genres-helper.py work --queue-dir imported-genre-jobs --profile sickprodigy --credentials-file .env
+musicbrainz-genres scan --queue-dir logs/imported-genre-jobs --profile sickprodigy --credentials-file .env
+musicbrainz-genres work --queue-dir logs/imported-genre-jobs --profile sickprodigy --credentials-file .env
 ```
 
 `scan` covers present Lidarr albums and saves a timestamped JSON export under
@@ -429,7 +447,7 @@ reports name that account. Retagging adds upvotes for new genres without
 automatically withdrawing old votes. MusicBrainz retains user-specific tag votes,
 not a complete restorable copy of the library.
 
-The arr-scripts installer bundles the helper directly. Its application settings
+The arr-scripts installer installs this package at a pinned release. Its application settings
 are only `enableMusicBrainzHelper`, `musicBrainzUsername` and
 `musicBrainzToken` in `extended.conf`. Enabled and authenticated installations
 contribute automatically. The wrapper uses `--account-profile` to derive a safe,
@@ -440,26 +458,31 @@ For this integration, `MB_TOKEN` is an application token created under MusicBrai
 Account > Applications, not the website login password. Authentication uses HTTP
 Digest over HTTPS. `MB_PASSWORD` remains a legacy environment-variable alias for
 the token in standalone workflows. OAuth is not implemented in this helper.
-# Installed Lidarr integration
+## Arr-scripts integration
 
-The `musicbrainz_helper/` package exposes `musicbrainz-genres` and
-`musicbrainz-ratings` commands for arr-scripts. This project maintains contribution
-and synchronization logic; arr-scripts maintains `extended.conf`, import hooks
-and background services. The separately installed `sonicratings-engine` package maintains
-provider scoring and can also support SonicRatings's future GUI.
+Arr-scripts installs a pinned release and calls the same `musicbrainz-genres` and `musicbrainz-ratings` commands used manually. Event callbacks enqueue work; background workers make the remote requests. Existing queues and account-specific submission history remain in `/config/extended/`.
 
-Install the sibling SonicRatings engine first, then this package with `pip install .`.
-For development with both shared checkouts:
+See [genre setup](https://github.com/SickProdigy/arr-scripts/blob/main/lidarr/musicbrainz-genres.md) and [ratings setup](https://github.com/SickProdigy/arr-scripts/blob/main/lidarr/readme.md#ratings-automation) for container settings and wrapper commands. Arr-scripts also installs SonicRatings independently to fill unrated Subsonic songs; `enableRatings` controls those writes, while `enableMusicBrainzHelper` controls contributions. The Apple Music, iTunes, Last.fm genre, and Navidrome genre tools remain available as manual commands; they are not automatically scheduled by these hooks.
+
+The [ratings worker](musicbrainz_helper/ratings_worker.py) handles queue and history operations behind `musicbrainz-ratings`. The [shared utilities](musicbrainz_helper/musicbrainz.py) handle MusicBrainz requests, caching, and genre submissions. Command definitions live in [pyproject.toml](pyproject.toml).
+
+## Optional ratings from Last.fm
+
+The normal ratings command reads existing Subsonic ratings and preserves its artist, album, and song options. To contribute ratings for unrated recordings, the background/library adapter also supports an independent Last.fm source. Existing personal ratings take priority. No computed rating is written to Subsonic; the vote is sent to MusicBrainz, where SonicRatings can later find it.
+
+Configure `.env` with your Subsonic/Navidrome credentials, `MB_USERNAME`, a MusicBrainz application token (`MB_TOKEN`, or legacy `MB_PASSWORD`), and `LASTFM_API_KEY`. With `RATINGS_SUBMIT` unset or false, preview a library contribution pass, then explicitly submit:
 
 ```bash
-python -m pip install ../SonicRatings .
-musicbrainz-genres --help
-musicbrainz-ratings --help
-python -B -m unittest discover -s tests -p 'test_integrated*.py'
+musicbrainz-ratings library --state-dir logs/ratings-helper-state --rating-source lastfm
+musicbrainz-ratings library --state-dir logs/ratings-helper-state --rating-source lastfm --submit
 ```
 
-Package version 0.3.0 is pinned by arr-scripts to release tag `v0.3.0`; its engine
-dependency is 0.1.0 (`engine-v0.1.0`). Publish both package releases before deploying
-that arr-scripts revision. Packaging does not change existing local job, profile,
-provenance or submission-ledger formats. Root-level standalone scripts remain
-available for existing manual workflows.
+This source derives recording stars from Last.fm artist rank, listeners, and replay engagement, checking artist/title/version and returned recording IDs. It requires an existing matched MusicBrainz recording; creating missing catalog entries remains the new-artist/editor-seed workflow. iTunes rating/genre contributions and the other genre sources retain their existing options above.
+
+Arr-scripts calls the same entry point with `enqueue`, `work`, and `library`. Its default `ratingsSource="subsonic"` observes existing personal stars; `ratingsSource="lastfm"` also contributes Last.fm ratings for unrated recordings. Failed source requests retain retry inputs; successful MusicBrainz votes are tracked per account. Existing state paths and submission history remain compatible, and old pending Subsonic-write jobs are not resumed.
+
+A caller may supply generated-rating provenance with `RATINGS_GENERATED_RATINGS=/path/to/generated-ratings.json`, or `RATINGS_GENERATED_RATINGS_DIR=/path/to/scoped-state`. The worker checks the song and recording identity before using a source label. MusicBrainz-derived values stay excluded; later personal changes remain eligible. Arr-scripts passes this path automatically without adding a SonicRatings dependency to this package.
+
+Package version is **0.4.0**. Publish its `v0.4.0` tag before deploying the corresponding arr-scripts pin. Standalone helper use requires only this package; the combined arr-scripts installer also pins SonicRatings `v1.4.0`.
+
+Run checks with `python -B -m unittest discover -s tests -p 'test_*.py'`.

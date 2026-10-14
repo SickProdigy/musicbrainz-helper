@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -7,7 +6,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-import sys
 from musicbrainz_helper import musicbrainz_genres as helper
 
 GROUP = "00000000-0000-4000-8000-000000000001"
@@ -43,6 +41,15 @@ class FakeClient:
 
 
 class ImportedGenresTests(unittest.TestCase):
+    def test_current_and_legacy_token_environments_are_supported(self):
+        for key in ("MB_TOKEN", "MB_PASSWORD"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
+                settings = {"MB_USERNAME": "test-user", "MB_TOKEN": "", "MB_PASSWORD": ""}
+                settings[key] = "test-token"
+                with patch.dict(os.environ, settings), patch.object(helper.core, "MusicBrainzClient", side_effect=FakeClient) as client:
+                    self.assertEqual(helper.process(Path(directory), True, 7, ["recording"]), 0)
+                    self.assertEqual(client.call_args.args[1:], ("test-user", "test-token"))
+
     def test_app_token_is_used_as_digest_secret(self):
         from requests.auth import HTTPDigestAuth
         with tempfile.TemporaryDirectory() as directory:

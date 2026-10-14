@@ -19,12 +19,12 @@ from pathlib import Path
 from typing import Iterable
 
 import requests
+from .musicbrainz import load_dotenv, CLIENT
 from requests.auth import HTTPDigestAuth
 
 
 MB_BASE = "https://musicbrainz.org/ws/2"
 MB_NS = "http://musicbrainz.org/ns/mmd-2.0#"
-CLIENT = "itunes-library-helper-0.1"
 
 
 @dataclass(frozen=True)
@@ -62,8 +62,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("itunes-library-reports"),
-        help="Report directory (default: itunes-library-reports).",
+        default=Path("logs/itunes-library-reports"),
+        help="Report directory (default: logs/itunes-library-reports).",
     )
     parser.add_argument("--musicbrainz", action="store_true", help="Match entities and create a contribution preview.")
     parser.add_argument(
@@ -73,7 +73,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-matches", type=int, help="Limit uncached MusicBrainz matches for a short run.")
     parser.add_argument("--submit", action="store_true", help="Submit accepted ratings and genre upvotes.")
     parser.add_argument("--mb-username", default=None, help="Defaults to MB_USERNAME from .env.")
-    parser.add_argument("--mb-password", default=None, help="Defaults to MB_PASSWORD from .env.")
+    parser.add_argument("--mb-token", "--mb-password", dest="mb_password", default=None,
+                        help="MusicBrainz application token; defaults to MB_TOKEN (legacy MB_PASSWORD).")
     return parser.parse_args()
 
 
@@ -95,15 +96,6 @@ def rating_stars(value: object | None) -> str:
     return f"{rating / 20:g}" if 0 <= rating <= 100 else ""
 
 
-def load_dotenv(path: Path = Path(".env")) -> None:
-    if not path.is_file():
-        return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def normalize(value: str) -> str:
@@ -456,9 +448,9 @@ def main() -> int:
     if args.musicbrainz or args.submit:
         tracks, _, _ = read_source(args.source)
         username = args.mb_username or os.getenv("MB_USERNAME")
-        password = args.mb_password or os.getenv("MB_PASSWORD")
+        password = args.mb_password or (os.getenv("MB_TOKEN") or os.getenv("MB_PASSWORD"))
         if args.submit and not (username and password):
-            raise SystemExit("--submit requires MB_USERNAME and MB_PASSWORD in .env or CLI arguments.")
+            raise SystemExit("--submit requires MB_USERNAME and a MusicBrainz application token (MB_TOKEN; legacy MB_PASSWORD).")
         client = MusicBrainzClient(username, password)
         matches = match_musicbrainz(tracks, args.output_dir, args.match_scope, args.max_matches, client)
         accepted = [row for row in matches if row["match_status"] == "accepted"]

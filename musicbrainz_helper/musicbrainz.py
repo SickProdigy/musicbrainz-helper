@@ -18,7 +18,8 @@ import requests
 from requests.auth import HTTPDigestAuth
 MB_BASE = "https://musicbrainz.org/ws/2"
 MB_NS = "http://musicbrainz.org/ns/mmd-2.0#"
-CLIENT = "musicbrainz-helper/0.3.0"
+from . import __version__
+CLIENT = "musicbrainz-helper/" + __version__
 RETRY_DELAYS = (1, 3, 10, 30)
 ENTITY_LISTS = {"artist": "artist-list", "release-group": "release-group-list", "release": "release-list", "recording": "recording-list"}
 
@@ -130,6 +131,16 @@ class MusicBrainzClient:
                     raise RuntimeError(f"MusicBrainz submission failed after {attempt} attempts.") from None
                 time.sleep(delay)
         raise RuntimeError("MusicBrainz submission failed.")
+
+
+    def release_group_mbid(self, release_mbid: str) -> str:
+        cached = self.cache.get("release-groups-by-release", release_mbid)
+        if cached is not None:
+            return str(cached)
+        payload = self.request(f"release/{release_mbid}", inc="release-groups")
+        mbid = str((payload.get("release-group") or {}).get("id", ""))
+        self.cache.put("release-groups-by-release", release_mbid, mbid)
+        return mbid
 
 
 class SubmissionLedger:
@@ -258,3 +269,21 @@ def write_failures(output_dir: Path, failures: list[dict]) -> None:
         writer = csv.DictWriter(handle, fieldnames=("entity", "mbid", "name", "genre", "error"))
         writer.writeheader()
         writer.writerows(failures)
+
+
+def load_dotenv(path: Path | str = Path(".env")) -> None:
+    """Load simple KEY=VALUE configuration without overriding process settings."""
+    path = Path(path)
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"\"", "'"}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)

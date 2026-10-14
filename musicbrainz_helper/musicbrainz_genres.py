@@ -211,7 +211,7 @@ def musicbrainz_lock(root: Path):
 
 def process(root: Path, submit: bool, maximum: int, entities: list[str]) -> int:
     username = os.getenv("MB_USERNAME", "")
-    password = os.getenv("MB_TOKEN", "")
+    password = (os.getenv("MB_TOKEN") or os.getenv("MB_PASSWORD", ""))
     if submit and not (username and password):
         raise ValueError("Submission requires MB_USERNAME and MB_TOKEN (MusicBrainz application token)")
     account = hashlib.sha256(username.encode()).hexdigest()[:16] if submit else "preview"
@@ -255,6 +255,7 @@ def main() -> int:
     parser.add_argument("--profile", help="Optional local profile name, e.g. your MusicBrainz username.")
     parser.add_argument("--account-profile", action="store_true", help="Select a safe local profile automatically from MB_USERNAME.")
     parser.add_argument("--source", choices=("embedded-provider", "embedded-beets"), default="embedded-provider")
+    parser.add_argument("--credentials-file", type=Path)
     parser.add_argument("--submit", action="store_true")
     parser.add_argument("--max-tags", type=int, default=7)
     parser.add_argument("--entity", action="append", choices=("artist", "release-group", "release", "recording"))
@@ -262,6 +263,8 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.max_tags < 1:
         parser.error("--max-tags must be positive")
+    if args.credentials_file:
+        core.load_dotenv(args.credentials_file)
     if args.account_profile:
         if args.profile:
             parser.error("Use either --profile or --account-profile")

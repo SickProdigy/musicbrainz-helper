@@ -18,9 +18,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
+from .musicbrainz import load_dotenv, CLIENT
 
 
-SCRIPT_VERSION = "0.1.0"
 APPLE_LOOKUP_URL = "https://itunes.apple.com/lookup"
 MUSICBRAINZ_API_URL = "https://musicbrainz.org/ws/2"
 MUSICBRAINZ_RELEASE_EDITOR = "https://musicbrainz.org/release/add"
@@ -94,27 +94,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        help="Output HTML path (default: new-artist-reports/<artist>-apple-music-import.html).",
+        help="Output HTML path (default: logs/new-artist-reports/<artist>-apple-music-import.html).",
     )
     parser.add_argument("--open", action="store_true", help="Open the generated report in a browser.")
     parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default="INFO")
     return parser.parse_args()
 
 
-def load_dotenv(path: Path = Path(".env")) -> None:
-    if not path.exists():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-            value = value[1:-1]
-        if key:
-            os.environ.setdefault(key, value)
 
 
 def normalize(value: str) -> str:
@@ -206,7 +192,7 @@ class AppleClient:
     def __init__(self, country: str) -> None:
         self.country = country.lower()
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": f"musicbrainz-helper/{SCRIPT_VERSION}"})
+        self.session.headers.update({"User-Agent": CLIENT})
 
     def lookup(self, apple_id: int, entity: str | None = None, limit: int = 200) -> list[dict]:
         params: dict[str, object] = {"id": apple_id, "country": self.country, "limit": limit}
@@ -306,7 +292,7 @@ class MusicBrainzClient:
         self.session = requests.Session()
         contact = os.getenv("MB_CONTACT", "https://github.com/SickProdigy/musicbrainz-helper")
         self.session.headers.update(
-            {"User-Agent": f"musicbrainz-helper/{SCRIPT_VERSION} ({contact})", "Accept": "application/json"}
+            {"User-Agent": f"{CLIENT} ({contact})", "Accept": "application/json"}
         )
         self.next_request_at = 0.0
 
@@ -674,7 +660,7 @@ def main() -> int:
         exact_count += int(has_exact)
         release_rows.append((release, matches, args.include_existing or not has_exact))
 
-    output = args.output or Path("new-artist-reports") / f"{safe_filename(artist_name)}-apple-music-import.html"
+    output = args.output or Path("logs/new-artist-reports") / f"{safe_filename(artist_name)}-apple-music-import.html"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         render_report(

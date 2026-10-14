@@ -5,12 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 
-SCRIPT = Path(__file__).parents[1] / "musicbrainz-new-artist-helper.py"
-SPEC = importlib.util.spec_from_file_location("new_artist_helper", SCRIPT)
-helper = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = helper
-SPEC.loader.exec_module(helper)
+from musicbrainz_helper import new_artist as helper
 
 
 class NewArtistHelperTests(unittest.TestCase):

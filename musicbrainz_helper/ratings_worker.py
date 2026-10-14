@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Integrated import rating jobs and one-way Subsonic -> MusicBrainz synchronization.
+"""Observe existing Subsonic ratings and contribute changes to MusicBrainz.
 
-Rating generation uses the installed SonicRatings engine. This package owns
+This adapter reads existing Subsonic ratings and submits changes to MusicBrainz. It owns
 Subsonic synchronization and MusicBrainz contribution history.
 """
 from __future__ import annotations
@@ -24,7 +24,8 @@ import requests
 
 from . import musicbrainz_genres as genres
 from . import musicbrainz as core
-from sonicratings_engine.ratings import RatingProvider, normalized
+from .ratings import build_submission, normalized
+from .rating_sources import LastFmRatingSource
 
 
 
@@ -101,12 +102,6 @@ class Subsonic:
     def get_song(self, song_id):
         return self.call("getSong", id=song_id)["song"]
 
-    def set_rating(self, song_id, rating):
-        self.call("setRating", id=song_id, rating=rating)
-
-
-
-
 
 
 def enqueue(root, album_id, fetch=None, read_tags=None):
@@ -165,10 +160,7 @@ def find_song(track, songs):
 
 
 def rating_xml(recording, value):
-    root = ET.Element("metadata", xmlns="http://musicbrainz.org/ns/mmd-2.0#")
-    entity = ET.SubElement(ET.SubElement(root, "recording-list"), "recording", id=recording)
-    ET.SubElement(entity, "user-rating").text = str(value * 20)
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    return build_submission([("recording", recording, value * 20)])
 
 
 def observe(state, song, recording, now):
@@ -191,6 +183,24 @@ def observe(state, song, recording, now):
     return row
 
 
+def apply_generated(row, song_id, generated_ratings):
+    """Read optional provenance supplied by the caller; no producer import is needed."""
+    generated = (generated_ratings or {}).get(song_id)
+    if not generated or generated.get("value") != row["observed"]:
+        return
+    recording = genres.mbid(generated.get("recording"))
+    if not recording or recording != row["recording"]:
+        return
+    stamp = generated.get("updated", 0)
+    if row.get("generated_seen") == stamp:
+        return
+    source = generated.get("source")
+    if source not in {"musicbrainz", "lastfm", "spotify", "tidal", "discogs"}:
+        return
+    row.update(source=source, generated=row["observed"], generated_source=source, generated_seen=stamp, initialized=True)
+    row.pop("contribution", None)
+
+
 def synchronize(state, songs, ledger, mb, save_ledger):
     grouped = defaultdict(list)
     for song_id, row in state["songs"].items():
@@ -198,12 +208,16 @@ def synchronize(state, songs, ledger, mb, save_ledger):
             grouped[row["recording"]].append(row)
     failures = 0
     for recording, rows in grouped.items():
-        ratings = {row["observed"] for row in rows}
+        def contribution(row):
+            if row["source"] in {"unverified", "no-provider-rating"} and row.get("contribution"):
+                return row["contribution"]["value"]
+            return row["observed"]
+        ratings = {contribution(row) for row in rows}
         if len(ratings) != 1:
             logging.warning("Conflicting ratings for recording %s; submission skipped", recording)
             continue
         value = ratings.pop()
-        if not any(row["source"] in {"lastfm", "subsonic-change", "navidrome-change"} for row in rows):
+        if not any(row["source"] in {"lastfm", "spotify", "tidal", "discogs", "subsonic-change", "navidrome-change", "subsonic-import"} or (row["source"] in {"unverified", "no-provider-rating"} and row.get("contribution")) for row in rows):
             continue
         if ledger.get(recording) == value or (value == 0 and recording not in ledger):
             continue
@@ -219,35 +233,30 @@ def synchronize(state, songs, ledger, mb, save_ledger):
     return failures
 
 
-def run_worker(root, server, provider, mb, submit=False, account="", interval=900, backfill=False, now=None):
+def run_worker(root, server, mb, submit=False, account="", interval=900, backfill=False, now=None, rating_source=None, generated_ratings=None):
+    """Observe existing ratings and contribute them; never write to Subsonic."""
     now = time.time() if now is None else now
     state_path = root / "state.json"
     state = load_json(state_path, {"version": 1, "songs": {}, "last_scan": 0})
     jobs = sorted((root / "jobs").glob("*.json"))
     if not backfill and not jobs and now - state["last_scan"] < interval:
         return 0
-    songs = server.songs()  # A failed/incomplete scan must never imply rating withdrawal.
+    songs = server.songs()  # Failed scans must never imply rating withdrawal.
     failures = 0
     for song_id, song in songs.items():
-        recording = genres.mbid(song.get("musicBrainzId"))
+        recording = genres.mbid(song.get("musicBrainzId")) or state["songs"].get(song_id, {}).get("recording", "")
         if not recording:
-            recording = state["songs"].get(song_id, {}).get("recording", "")
-        if recording:
-            observe(state, song, recording, now)
-    genres.write_json(state_path, state)
-    candidates = []
-    for song_id, row in state["songs"].items():
-        if (row.get("pending_generation") or row.get("retry_track")) and song_id in songs:
-            song = songs[song_id]
-            candidates.append((song, row.get("retry_track") or {
-                "recording": row["recording"], "artist": song.get("artist", ""),
-                "title": song.get("title", ""), "album": song.get("album", "")}))
+            continue
+        row = observe(state, song, recording, now)
+        apply_generated(row, song_id, generated_ratings)
+        # Preserve old provenance/history, but never resume queued generation.
+        row.pop("pending_generation", None)
+        row.pop("retry_track", None)
+        if backfill and stars(song) and row["source"] in {"unverified", "no-provider-rating"}:
+            row.update(source="subsonic-import", initialized=True)
+    contribution_tracks = []
     if backfill:
-        candidates.extend((song, {"recording": genres.mbid(song.get("musicBrainzId")),
-                                "artist": song.get("artist", ""), "title": song.get("title", ""),
-                                "album": song.get("album", "")}) for song in songs.values()
-                          if genres.mbid(song.get("musicBrainzId")))
-    job_status = {}
+        contribution_tracks.extend((song, {"recording": genres.mbid(song.get("musicBrainzId")), "artist": song.get("artist", ""), "title": song.get("title", ""), "album": song.get("album", "")}) for song in songs.values() if genres.mbid(song.get("musicBrainzId")))
     for path in jobs:
         try:
             job = load_json(path, {})
@@ -256,81 +265,66 @@ def run_worker(root, server, provider, mb, submit=False, account="", interval=90
                 song = find_song(track, songs)
                 if song is None:
                     remaining.append(track)
-                else:
-                    candidates.append((song, track))
-            job_status[path] = (job, remaining)
-        except (ValueError, KeyError, TypeError):
-            logging.warning("Invalid rating job %s; left for inspection", path.name)
-            failures += 1
-    retry_ids = set()
-    seen = set()
-    for song, track in candidates:
-        song_id = str(song["id"])
-        if song_id in seen:
-            continue
-        seen.add(song_id)
-        row = observe(state, song, track["recording"], now)
-        if backfill and row["source"] == "no-provider-rating":
-            row["initialized"] = False
-        if row["initialized"]:
-            row.pop("retry_track", None)
-            continue
-        row["retry_track"] = track
-        genres.write_json(state_path, state)
-        try:
-            # Recheck just before writing; do not overwrite a rating set during the scan.
-            latest = server.get_song(song_id)
-            if stars(latest) != row["observed"]:
-                songs[song_id] = latest
-                observe(state, latest, track["recording"], now)
-                continue
-            generated = row.get("pending_generation")
-            if generated is None:
-                rating = provider.rating(track)
-                if rating is None or rating[0] == 0:
-                    row.update(initialized=True, source="no-provider-rating")
-                    row.pop("retry_track", None)
-                    genres.write_json(state_path, state)
                     continue
-                generated = {"value": rating[0], "source": rating[1]}
-                row["pending_generation"] = generated
-                # Persist intent before the remote write: recover a crash or lost response
-                # without mistaking our own MusicBrainz-derived rating for a manual edit.
-                genres.write_json(state_path, state)
-            server.set_rating(song_id, generated["value"])
-            row.update(observed=generated["value"], source=generated["source"], initialized=True,
-                       generated=generated["value"], generated_source=generated["source"], updated=now)
-            row.pop("pending_generation", None)
-            row.pop("retry_track", None)
-            songs[song_id] = {**song, "userRating": generated["value"]}
-            genres.write_json(state_path, state)
+                latest = server.get_song(str(song["id"]))
+                recording = genres.mbid(latest.get("musicBrainzId"))
+                if recording and recording != track["recording"]:
+                    remaining.append(track)
+                    continue
+                songs[str(song["id"])] = latest
+                contribution_tracks.append((latest, track))
+                row = observe(state, latest, track["recording"], now)
+                apply_generated(row, str(latest["id"]), generated_ratings)
+                if rating_source is not None and not stars(latest) and row["source"] in {"unverified", "no-provider-rating"}:
+                    row["contribution_track"] = track
+                if stars(latest) and row["source"] in {"unverified", "no-provider-rating"}:
+                    row.update(source="subsonic-import", initialized=True)
+            genres.write_json(state_path, state)  # Persist observations before consuming the job.
+            if remaining:
+                genres.write_json(path, {**job, "tracks": remaining})
+            else:
+                path.unlink()
         except Exception:
-            logging.warning("Rating track %s failed; will retry", song_id)
-            retry_ids.add(song_id)
+            logging.warning("Rating import observation failed; job retained for retry")
             failures += 1
-    for path, (job, remaining) in job_status.items():
-        remaining.extend(track for track in job["tracks"]
-                         if (song := find_song(track, songs)) is not None and str(song["id"]) in retry_ids)
-        if remaining:
-            genres.write_json(path, {**job, "tracks": remaining})
-        else:
-            path.unlink()
+    if rating_source is not None:
+        seen = set()
+        for song, track in contribution_tracks:
+            identity = str(song["id"])
+            row = state["songs"][identity]
+            if identity in seen or stars(song) or row["source"] not in {"unverified", "no-provider-rating"}:
+                continue
+            seen.add(identity)
+            row["contribution_track"] = track
+        # Persist retry inputs: a source/API failure must not lose an import job.
+        genres.write_json(state_path, state)
+        for identity, row in state["songs"].items():
+            track = row.get("contribution_track")
+            if not track or identity not in songs or stars(songs[identity]) or row["source"] not in {"unverified", "no-provider-rating"}:
+                continue
+            try:
+                vote = rating_source.rating(track)
+                if vote is not None and 1 <= vote[0] <= 5:
+                    row["contribution"] = {"value": vote[0], "source": vote[1]}
+                row.pop("contribution_track", None)
+            except Exception:
+                logging.warning("Rating contribution source failed; retained for retry")
+                failures += 1
     state["last_scan"] = now
     genres.write_json(state_path, state)
     if submit:
         ledger_path = root / f"submitted-{hashlib.sha256(account.encode()).hexdigest()[:16]}.json"
         ledger = load_json(ledger_path, {})
         failures += synchronize(state, songs, ledger, mb, lambda: genres.write_json(ledger_path, ledger))
-    logging.info("Ratings: observed %d songs, processed %d import/backfill tracks, %d failures",
-                 len(songs), len(seen), failures)
+    logging.info("Ratings: observed %d songs, %d failures", len(songs), failures)
     return failures
 
 
 def subsonic_settings():
     """Prefer generic settings while retaining legacy Navidrome environments."""
-    return ((os.getenv("SUBSONIC_URL") or os.getenv("NAVIDROME_URL", "")).rstrip("/"),
-            os.getenv("SUBSONIC_USERNAME") or os.getenv("NAVIDROME_USERNAME", ""),
-            os.getenv("SUBSONIC_PASSWORD") or os.getenv("NAVIDROME_PASSWORD", ""))
+    return ((os.getenv("SUBSONIC_URL") or os.getenv("NAVIDROME_URL") or os.getenv("NAVIDROME_BASE_URL") or os.getenv("NAV_BASE_URL", "")).rstrip("/"),
+            os.getenv("SUBSONIC_USERNAME") or os.getenv("NAVIDROME_USERNAME") or os.getenv("NAV_USER", ""),
+            os.getenv("SUBSONIC_PASSWORD") or os.getenv("NAVIDROME_PASSWORD") or os.getenv("NAV_PASS", ""))
 
 
 def main():
@@ -338,7 +332,13 @@ def main():
     parser.add_argument("command", choices=("enqueue", "work", "library"))
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--album-id", type=int)
+    parser.add_argument("--rating-source", choices=("subsonic", "lastfm"),
+                        default=os.getenv("RATINGS_SOURCE", "subsonic"),
+                        help="Existing Subsonic ratings, or Last.fm contributions for unrated songs")
+    parser.add_argument("--submit", action="store_true", help="Submit contributed ratings to MusicBrainz")
     args = parser.parse_args()
+    if args.rating_source not in {"subsonic", "lastfm"}:
+        parser.error("RATINGS_SOURCE must be subsonic or lastfm")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     server_url, server_user, server_password = subsonic_settings()
     identity = hashlib.sha256(json.dumps([server_url, server_user]).encode()).hexdigest()[:16]
@@ -351,17 +351,29 @@ def main():
                 raise ValueError("Configure subsonicUrl and subsonicUsername before queuing ratings")
             enqueue(root, args.album_id)
             return 0
+        rating_source = None
+        if args.rating_source == "lastfm":
+            key = os.getenv("LASTFM_API_KEY", "")
+            if not key:
+                raise ValueError("Last.fm contributions require LASTFM_API_KEY")
+            rating_source = LastFmRatingSource(key)
         server = Subsonic(server_url, server_user, server_password)
-        account, token = os.getenv("MB_USERNAME", ""), os.getenv("MB_TOKEN", "")
-        submit = os.getenv("RATINGS_SUBMIT") == "true" and bool(account and token)
+        account, token = os.getenv("MB_USERNAME", ""), (os.getenv("MB_TOKEN") or os.getenv("MB_PASSWORD", ""))
+        submit = (args.submit or os.getenv("RATINGS_SUBMIT") == "true") and bool(account and token)
+        if args.submit and not (account and token):
+            raise ValueError("Submissions require MB_USERNAME and MB_TOKEN")
+        provenance_path = os.getenv("RATINGS_GENERATED_RATINGS")
+        if not provenance_path and os.getenv("RATINGS_GENERATED_RATINGS_DIR"):
+            provenance_path = str(Path(os.environ["RATINGS_GENERATED_RATINGS_DIR"]) / identity / "generated-ratings.json")
         # Share the genre worker lock: no concurrent MusicBrainz calls within this account.
         shared = genres.profile_root(args.state_dir.parent / "musicbrainz-helper", genres.account_profile(account))
         with genres.musicbrainz_lock(shared), genres.worker_lock(root):
             mb = core.MusicBrainzClient(core.JsonCache(root / "mb-cache.json"), account, token)
-            failures = run_worker(root, server, RatingProvider(mb, os.getenv("LASTFM_API_KEY", "")), mb,
+            failures = run_worker(root, server, mb,
                                   submit=submit, account=account,
                                   interval=interval_seconds(os.getenv("RATINGS_INTERVAL", "15m")),
-                                  backfill=args.command == "library")
+                                  backfill=args.command == "library", rating_source=rating_source,
+                                  generated_ratings=load_json(Path(provenance_path), {}) if provenance_path else None)
         return 1 if failures else 0
     except Exception:
         logging.error("Ratings helper failed; check configuration and service availability. State retained for retry.")
