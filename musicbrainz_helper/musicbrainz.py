@@ -16,6 +16,8 @@ from collections import defaultdict
 from pathlib import Path
 import requests
 from requests.auth import HTTPDigestAuth
+from . import oauth
+from .oauth import OAuthManager
 MB_BASE = "https://musicbrainz.org/ws/2"
 MB_NS = "http://musicbrainz.org/ns/mmd-2.0#"
 from . import __version__
@@ -51,9 +53,14 @@ class MusicBrainzClient:
         self.cache = cache
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": f"{CLIENT} ({contact})", "Accept": "application/json"})
-        if username and password:
+        self.oauth = OAuthManager.from_environment()
+        if not self.oauth and username and password:
             self.session.auth = HTTPDigestAuth(username, password)
         self.next_request = 0.0
+
+    def authenticate(self) -> None:
+        if self.oauth:
+            self.oauth.apply(self.session)
 
     def request(self, endpoint: str, **params) -> dict:
         for attempt, delay in enumerate(RETRY_DELAYS, start=1):
@@ -62,6 +69,7 @@ class MusicBrainzClient:
                 time.sleep(wait)
             self.next_request = time.monotonic() + 1.1
             try:
+                self.authenticate()
                 response = self.session.get(f"{MB_BASE}/{endpoint}", params={"fmt": "json", **params}, timeout=45)
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < len(RETRY_DELAYS):
                     time.sleep(int(response.headers.get("Retry-After", delay)))
@@ -117,6 +125,7 @@ class MusicBrainzClient:
                 time.sleep(wait)
             self.next_request = time.monotonic() + 1.1
             try:
+                self.authenticate()
                 response = self.session.post(
                     f"{MB_BASE}/{endpoint}", params={"client": CLIENT}, data=body,
                     headers={"Content-Type": "application/xml; charset=utf-8"}, timeout=60,

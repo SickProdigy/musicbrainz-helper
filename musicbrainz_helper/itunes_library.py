@@ -21,6 +21,7 @@ from typing import Iterable
 import requests
 from .musicbrainz import load_dotenv, CLIENT
 from requests.auth import HTTPDigestAuth
+from .oauth import OAuthManager, has_oauth_credentials
 
 
 MB_BASE = "https://musicbrainz.org/ws/2"
@@ -127,11 +128,14 @@ class MusicBrainzClient:
         contact = os.getenv("MB_CONTACT", "https://github.com/SickProdigy/musicbrainz-helper")
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": f"{CLIENT} ({contact})", "Accept": "application/json"})
-        if username and password:
+        self.oauth = OAuthManager.from_environment()
+        if not self.oauth and username and password:
             self.session.auth = HTTPDigestAuth(username, password)
         self.next_request = 0.0
 
     def throttle(self) -> None:
+        if self.oauth:
+            self.oauth.apply(self.session)
         delay = self.next_request - time.monotonic()
         if delay > 0:
             time.sleep(delay)
@@ -449,8 +453,8 @@ def main() -> int:
         tracks, _, _ = read_source(args.source)
         username = args.mb_username or os.getenv("MB_USERNAME")
         password = args.mb_password or (os.getenv("MB_TOKEN") or os.getenv("MB_PASSWORD"))
-        if args.submit and not (username and password):
-            raise SystemExit("--submit requires MB_USERNAME and a MusicBrainz application token (MB_TOKEN; legacy MB_PASSWORD).")
+        if args.submit and not ((username and password) or has_oauth_credentials()):
+            raise SystemExit("--submit requires authorized MusicBrainz OAuth or MB_USERNAME and MB_TOKEN.")
         client = MusicBrainzClient(username, password)
         matches = match_musicbrainz(tracks, args.output_dir, args.match_scope, args.max_matches, client)
         accepted = [row for row in matches if row["match_status"] == "accepted"]

@@ -210,10 +210,10 @@ def musicbrainz_lock(root: Path):
 
 
 def process(root: Path, submit: bool, maximum: int, entities: list[str]) -> int:
-    username = os.getenv("MB_USERNAME", "")
+    username = core.oauth.authenticated_username(os.getenv("MB_USERNAME", ""))
     password = (os.getenv("MB_TOKEN") or os.getenv("MB_PASSWORD", ""))
-    if submit and not (username and password):
-        raise ValueError("Submission requires MB_USERNAME and MB_TOKEN (MusicBrainz application token)")
+    if submit and not ((username and password) or core.oauth.has_oauth_credentials()):
+        raise ValueError("Submission requires authorized MusicBrainz OAuth or MB_USERNAME and MB_TOKEN")
     account = hashlib.sha256(username.encode()).hexdigest()[:16] if submit else "preview"
     mode = f"submit-{account}" if submit else "preview"
     with musicbrainz_lock(root):

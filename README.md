@@ -408,8 +408,9 @@ musicbrainz-genres work --queue-dir logs/imported-genre-jobs --credentials-file 
 ```
 
 Enqueue uses `LIDARR_URL` and `LIDARR_API_KEY` from the environment (or an explicit
-`--credentials-file`). The worker uses `MB_USERNAME`, `MB_TOKEN` and optional
-`MB_CONTACT`. Preview is the default. Imported genres target the release group,
+`--credentials-file`). The worker prefers authorized MusicBrainz OAuth and retains
+`MB_USERNAME` plus `MB_TOKEN` as a temporary Digest fallback. `MB_CONTACT` is
+optional. Preview is the default. Imported genres target the release group,
 all its release editions and exact embedded recording IDs verified in those
 releases. Different recordings are not expanded by title alone. Repeated
 `--entity` flags limit targets; artist contributions require an explicit
@@ -447,17 +448,27 @@ reports name that account. Retagging adds upvotes for new genres without
 automatically withdrawing old votes. MusicBrainz retains user-specific tag votes,
 not a complete restorable copy of the library.
 
-The arr-scripts installer installs this package at a pinned release. Its application settings
-are only `enableMusicBrainzHelper`, `musicBrainzUsername` and
-`musicBrainzToken` in `extended.conf`. Enabled and authenticated installations
-contribute automatically. The wrapper uses `--account-profile` to derive a safe,
+The arr-scripts installer installs this package at a pinned release. Configure an
+Installed Application client ID and secret in `extended.conf`, then run:
+
+```bash
+bash /config/extended/MusicBrainzGenres.bash --authorize
+```
+
+The command prints the MusicBrainz approval URL and prompts for the one-time
+authorization code. It stores the refresh token privately under
+`/config/extended/musicbrainz-helper/`; workers refresh short-lived access tokens
+automatically. Enabled and authenticated installations contribute automatically.
+The wrapper uses `--account-profile` to derive a safe,
 distinct local profile from `MB_USERNAME`; no extra profile or submission setting
 is needed. The standalone CLI above retains explicit preview/submission controls.
 
-For this integration, `MB_TOKEN` is an application token created under MusicBrainz
-Account > Applications, not the website login password. Authentication uses HTTP
-Digest over HTTPS. `MB_PASSWORD` remains a legacy environment-variable alias for
-the token in standalone workflows. OAuth is not implemented in this helper.
+For standalone use, set `MB_OAUTH_CLIENT_ID`, `MB_OAUTH_CLIENT_SECRET`,
+`MB_OAUTH_TOKEN_FILE`, and optionally `MB_OAUTH_REDIRECT_URI`, then run
+`musicbrainz-auth authorize`. OAuth requests only `tag`, `rating`, and `profile`
+permissions. Tokens are never passed in command arguments or written to reports.
+`MB_TOKEN` remains a deprecated Digest-token fallback; `MB_PASSWORD` is its legacy
+alias. Do not store the MusicBrainz website password.
 ## Arr-scripts integration
 
 Arr-scripts installs a pinned release and calls the same `musicbrainz-genres` and `musicbrainz-ratings` commands used manually. Event callbacks enqueue work; background workers make the remote requests. Existing queues and account-specific submission history remain in `/config/extended/`.
@@ -470,7 +481,9 @@ The [ratings worker](musicbrainz_helper/ratings_worker.py) handles queue and his
 
 The normal ratings command reads existing Subsonic ratings and preserves its artist, album, and song options. To contribute ratings for unrated recordings, the background/library adapter also supports an independent Last.fm source. Existing personal ratings take priority. No computed rating is written to Subsonic; the vote is sent to MusicBrainz, where SonicRatings can later find it.
 
-Configure `.env` with your Subsonic/Navidrome credentials, `MB_USERNAME`, a MusicBrainz application token (`MB_TOKEN`, or legacy `MB_PASSWORD`), and `LASTFM_API_KEY`. With `RATINGS_SUBMIT` unset or false, preview a library contribution pass, then explicitly submit:
+Configure `.env` with your Subsonic/Navidrome credentials, authorized MusicBrainz
+OAuth settings, and `LASTFM_API_KEY`. With `RATINGS_SUBMIT` unset or false, preview
+a library contribution pass, then explicitly submit:
 
 ```bash
 musicbrainz-ratings library --state-dir logs/ratings-helper-state --rating-source lastfm

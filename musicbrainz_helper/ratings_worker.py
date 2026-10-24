@@ -358,10 +358,12 @@ def main():
                 raise ValueError("Last.fm contributions require LASTFM_API_KEY")
             rating_source = LastFmRatingSource(key)
         server = Subsonic(server_url, server_user, server_password)
-        account, token = os.getenv("MB_USERNAME", ""), (os.getenv("MB_TOKEN") or os.getenv("MB_PASSWORD", ""))
-        submit = (args.submit or os.getenv("RATINGS_SUBMIT") == "true") and bool(account and token)
-        if args.submit and not (account and token):
-            raise ValueError("Submissions require MB_USERNAME and MB_TOKEN")
+        account = core.oauth.authenticated_username(os.getenv("MB_USERNAME", ""))
+        token = os.getenv("MB_TOKEN") or os.getenv("MB_PASSWORD", "")
+        authenticated = bool(account and token) or core.oauth.has_oauth_credentials()
+        submit = (args.submit or os.getenv("RATINGS_SUBMIT") == "true") and authenticated
+        if args.submit and not authenticated:
+            raise ValueError("Submissions require authorized MusicBrainz OAuth or MB_USERNAME and MB_TOKEN")
         provenance_path = os.getenv("RATINGS_GENERATED_RATINGS")
         if not provenance_path and os.getenv("RATINGS_GENERATED_RATINGS_DIR"):
             provenance_path = str(Path(os.environ["RATINGS_GENERATED_RATINGS_DIR"]) / identity / "generated-ratings.json")

@@ -23,6 +23,7 @@ import xml.etree.ElementTree as ET
 
 import requests
 from requests.auth import HTTPDigestAuth
+from .oauth import OAuthManager, has_oauth_credentials
 from colorama import init, Fore, Style
 
 # Initialize colorama
@@ -680,11 +681,14 @@ class MusicBrainzClient:
         self.client = client
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": client, "Accept": "application/json"})
-        if username and password:
+        self.oauth = OAuthManager.from_environment()
+        if not self.oauth and username and password:
             self.session.auth = HTTPDigestAuth(username, password)
         self._next_request_at = 0.0
 
     def _throttle(self) -> None:
+        if self.oauth:
+            self.oauth.apply(self.session)
         now = time.monotonic()
         if now < self._next_request_at:
             time.sleep(self._next_request_at - now)
@@ -1315,6 +1319,9 @@ def standalone_main() -> int:
     force_artist_ratings_mode = bool(args.force_artist_ratings)
     mb_username = args.mb_username or os.environ.get("MB_USERNAME")
     mb_password = args.mb_password or os.environ.get("MB_TOKEN") or os.environ.get("MB_PASSWORD")
+    if not args.dry_run and not ((mb_username and mb_password) or has_oauth_credentials()):
+        logging.error("Submission requires authorized MusicBrainz OAuth or MB_USERNAME and MB_TOKEN.")
+        return 2
 
     default_entities = ["album"] if force_artist_ratings_mode else (["song", "album"] if args.start_album_id else ["song", "album", "artist"])
     entities = set(args.entity or default_entities)

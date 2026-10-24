@@ -24,6 +24,7 @@ MB_BASE = "https://musicbrainz.org/ws/2"
 LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
 MB_NS = "http://musicbrainz.org/ns/mmd-2.0#"
 from .musicbrainz import CLIENT, JsonCache, MusicBrainzClient, SubmissionLedger, add_target, finalized_rows, load_dotenv, normalized, submission_xml, submit_resilient, write_failures, write_reports
+from .oauth import has_oauth_credentials
 RETRY_DELAYS = (1, 3, 10, 30)
 ENTITY_LISTS = {
     "artist": "artist-list",
@@ -432,8 +433,8 @@ def main() -> int:
     lastfm = LastFmClient(required_env("LASTFM_API_KEY"), cache)
     username = os.getenv("MB_USERNAME", "")
     password = os.getenv("MB_TOKEN", "") or os.getenv("MB_PASSWORD", "")
-    if args.submit and not (username and password):
-        raise SystemExit("--submit requires MB_USERNAME and MB_TOKEN (MusicBrainz application token).")
+    if args.submit and not ((username and password) or has_oauth_credentials()):
+        raise SystemExit("--submit requires authorized MusicBrainz OAuth or MB_USERNAME and MB_TOKEN.")
     musicbrainz = MusicBrainzClient(cache, username, password)
     vocabulary = musicbrainz.genres()
 

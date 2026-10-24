@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "musicbrainz-helper"
-version = "0.4.0"
+version = "0.5.0"
 description = "Ratings, genres, and catalog contributions to MusicBrainz"
 requires-python = ">=3.10"
 dependencies = ["requests>=2.32", "mutagen>=1.47", "colorama>=0.4.6"]
@@ -12,6 +12,7 @@ dependencies = ["requests>=2.32", "mutagen>=1.47", "colorama>=0.4.6"]
 [project.scripts]
 musicbrainz-genres = "musicbrainz_helper.musicbrainz_genres:main"
 musicbrainz-ratings = "musicbrainz_helper.ratings:main"
+musicbrainz-auth = "musicbrainz_helper.oauth:main"
 
 musicbrainz-new-artist = "musicbrainz_helper.new_artist:main"
 musicbrainz-itunes-library = "musicbrainz_helper.itunes_library:main"

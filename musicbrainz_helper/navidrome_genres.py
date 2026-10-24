@@ -24,6 +24,7 @@ from requests.auth import HTTPDigestAuth
 MB_BASE = "https://musicbrainz.org/ws/2"
 MB_NS = "http://musicbrainz.org/ns/mmd-2.0#"
 from .musicbrainz import CLIENT, normalized, JsonCache, MusicBrainzClient, submission_xml, load_dotenv
+from .oauth import has_oauth_credentials
 ENTITY_LISTS = {
     "artist": "artist-list",
     "release-group": "release-group-list",
@@ -199,9 +200,10 @@ def main() -> int:
         required_env("NAVIDROME_USERNAME"),
         required_env("NAVIDROME_PASSWORD"),
     )
-    username, password = os.getenv("MB_USERNAME", ""), os.getenv("MB_PASSWORD", "")
-    if args.submit and not (username and password):
-        raise SystemExit("--submit requires MB_USERNAME and MB_PASSWORD.")
+    username = os.getenv("MB_USERNAME", "")
+    password = os.getenv("MB_TOKEN", "") or os.getenv("MB_PASSWORD", "")
+    if args.submit and not ((username and password) or has_oauth_credentials()):
+        raise SystemExit("--submit requires authorized MusicBrainz OAuth or MB_USERNAME and MB_TOKEN.")
     musicbrainz = MusicBrainzClient(cache, username, password)
     vocabulary = musicbrainz.genres()
 
