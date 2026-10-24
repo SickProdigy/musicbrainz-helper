@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -200,6 +201,14 @@ class ImportedGenresTests(unittest.TestCase):
             with patch.object(helper.core, "MusicBrainzClient", FakeClient):
                 self.assertEqual(helper.process(root, True, 7, ["recording"]), 0)
             self.assertEqual(len(list(root.glob("reports/**/complete.json"))), 1)
+
+    def test_busy_worker_is_a_clean_service_retry(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(sys, "argv", ["musicbrainz-genres", "work", "--queue-dir", directory]), \
+                patch.object(helper, "process", side_effect=helper.WorkerBusy("busy")), \
+                self.assertLogs(level="INFO") as logs:
+            self.assertEqual(helper.main(), 0)
+        self.assertIn("worker already active", "\n".join(logs.output))
 
 
 if __name__ == "__main__":

@@ -377,6 +377,9 @@ def main():
                                   backfill=args.command == "library", rating_source=rating_source,
                                   generated_ratings=load_json(Path(provenance_path), {}) if provenance_path else None)
         return 1 if failures else 0
+    except genres.WorkerBusy:
+        logging.info("MusicBrainz worker already active; retrying on the next service cycle")
+        return 0
     except Exception:
         logging.error("Ratings helper failed; check configuration and service availability. State retained for retry.")
         return 1

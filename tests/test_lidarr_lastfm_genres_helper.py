@@ -13,7 +13,7 @@ from musicbrainz_helper import lastfm_genres as helper
 
 class LidarrLastFmGenresHelperTests(unittest.TestCase):
     def test_musicbrainz_user_agent_identifies_name_and_version(self):
-        self.assertEqual(helper.CLIENT, "musicbrainz-helper/0.5.1")
+        self.assertEqual(helper.CLIENT, "musicbrainz-helper/0.5.2")
 
     def test_filters_ranked_tags_to_musicbrainz_genres(self):
         tags = [

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "musicbrainz-helper"
-version = "0.5.1"
+version = "0.5.2"
 description = "Ratings, genres, and catalog contributions to MusicBrainz"
 requires-python = ">=3.10"
 dependencies = ["requests>=2.32", "mutagen>=1.47", "colorama>=0.4.6"]

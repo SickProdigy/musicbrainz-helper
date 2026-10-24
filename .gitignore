@@ -7,6 +7,8 @@ logs/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+build/
+dist/
 *.db
 *.sqlite
 *.sqlite3

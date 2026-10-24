@@ -270,6 +270,16 @@ from musicbrainz_helper import ratings,ratings_worker,musicbrainz_genres
         self.assertTrue((base / "worker-cooldown.json").exists())
         self.assertTrue((base / "worker.lock").exists())
 
+    def test_busy_musicbrainz_worker_is_a_clean_service_retry(self):
+        with patch.dict(os.environ, {"SUBSONIC_URL": "http://navidrome", "SUBSONIC_USERNAME": "user",
+                                     "SUBSONIC_PASSWORD": "password"}), \
+                patch.object(sys, "argv", ["musicbrainz-ratings", "work", "--state-dir", str(self.root / "ratings")]), \
+                patch.object(helper, "Subsonic", return_value=Mock()), \
+                patch.object(helper.genres, "musicbrainz_lock", side_effect=helper.genres.WorkerBusy("busy")), \
+                self.assertLogs(level="INFO") as logs:
+            self.assertEqual(helper.main(), 0)
+        self.assertIn("worker already active", "\n".join(logs.output))
+
     def test_subsonic_environment_names_preserve_legacy_settings(self):
         legacy = {"NAVIDROME_URL": "https://server.example.test/", "NAVIDROME_USERNAME": "listener",
                   "NAVIDROME_PASSWORD": "fake-secret"}

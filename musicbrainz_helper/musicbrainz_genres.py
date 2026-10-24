@@ -177,20 +177,27 @@ def targets(job: dict, client, maximum: int, entities: list[str]) -> tuple[list[
     return core.finalized_rows(result), sorted(unmatched)
 
 
+class WorkerBusy(RuntimeError):
+    """Another helper worker currently owns the requested state lock."""
+
+
 @contextmanager
 def worker_lock(root: Path):
     root.mkdir(parents=True, exist_ok=True)
     with (root / "worker.lock").open("a+b") as handle:
-        if os.name == "nt":
-            import msvcrt
-            handle.seek(0)
-            handle.write(b"0")
-            handle.flush()
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                handle.write(b"0")
+                handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, PermissionError) as exc:
+            raise WorkerBusy("another helper worker is already active") from exc
         yield
 
 
@@ -294,8 +301,12 @@ def main() -> int:
         else:
             logging.info("No usable embedded genres; no contribution queued")
         return 0
-    return process(root, args.submit, args.max_tags,
-                   args.entity or ["release-group", "release", "recording"])
+    try:
+        return process(root, args.submit, args.max_tags,
+                       args.entity or ["release-group", "release", "recording"])
+    except WorkerBusy:
+        logging.info("MusicBrainz worker already active; retrying on the next service cycle")
+        return 0
 
 
 if __name__ == "__main__":
