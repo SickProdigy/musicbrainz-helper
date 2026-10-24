@@ -51,6 +51,18 @@ class OAuthTests(unittest.TestCase):
         self.assertEqual(stored["refresh_token"], "refresh")
         self.assertGreater(stored["expires_at"], 0)
 
+    def test_begin_reuses_pending_url_and_complete_consumes_it(self):
+        first_url, created = self.manager.begin()
+        second_url, created_again = self.manager.begin()
+        self.assertTrue(created)
+        self.assertFalse(created_again)
+        self.assertEqual(first_url, second_url)
+        self.http.post.return_value = response(payload={"access_token": "access", "refresh_token": "refresh", "expires_in": 3600})
+        self.http.get.return_value = response(payload={"sub": "sickprodigy"})
+        self.manager.complete("one-time-code")
+        self.assertFalse(self.manager.pending_file.exists())
+        self.assertTrue(self.token_file.exists())
+
     def test_expired_access_token_is_refreshed_and_refresh_token_is_preserved(self):
         self.manager.save({"access_token": "old", "refresh_token": "refresh", "expires_in": -1,
                            "musicbrainz_username": "sickprodigy"})
@@ -82,14 +94,38 @@ class OAuthTests(unittest.TestCase):
         with patch.dict(os.environ, {"MB_OAUTH_CLIENT_ID": "client", "MB_OAUTH_TOKEN_FILE": str(self.token_file)}, clear=False):
             self.assertEqual(authenticated_username("fallback"), "sickprodigy")
 
-    def test_shared_client_prefers_oauth_over_digest(self):
+    def test_shared_client_uses_oauth_when_digest_is_absent(self):
+        self.manager.save({"access_token": "access", "refresh_token": "refresh", "expires_in": 3600})
+        with patch.dict(os.environ, {"MB_OAUTH_CLIENT_ID": "client", "MB_OAUTH_CLIENT_SECRET": "secret",
+                                     "MB_OAUTH_TOKEN_FILE": str(self.token_file)}, clear=False):
+            client = musicbrainz.MusicBrainzClient(musicbrainz.JsonCache(Path(self.temp.name) / "cache.json"), "", "")
+            self.assertIsNone(client.session.auth)
+            client.authenticate()
+            self.assertEqual(client.session.headers["Authorization"], "Bearer access")
+
+    def test_shared_client_prefers_configured_digest_over_optional_oauth(self):
         self.manager.save({"access_token": "access", "refresh_token": "refresh", "expires_in": 3600})
         with patch.dict(os.environ, {"MB_OAUTH_CLIENT_ID": "client", "MB_OAUTH_CLIENT_SECRET": "secret",
                                      "MB_OAUTH_TOKEN_FILE": str(self.token_file)}, clear=False):
             client = musicbrainz.MusicBrainzClient(musicbrainz.JsonCache(Path(self.temp.name) / "cache.json"),
-                                                   "legacy-user", "legacy-token")
+                                                   "legacy-user", "legacy-password")
+            self.assertIsNone(client.oauth)
+            self.assertIsNotNone(client.session.auth)
+
+    def test_shared_client_falls_back_to_linked_oauth_after_digest_rejection(self):
+        self.manager.save({"access_token": "access", "refresh_token": "refresh", "expires_in": 3600})
+        denied = response(status=401)
+        denied.headers = {}
+        denied.raise_for_status.side_effect = requests.HTTPError("unauthorized", response=denied)
+        accepted = response(payload={"genres": []})
+        accepted.headers = {}
+        with patch.dict(os.environ, {"MB_OAUTH_CLIENT_ID": "client", "MB_OAUTH_CLIENT_SECRET": "secret",
+                                     "MB_OAUTH_TOKEN_FILE": str(self.token_file)}, clear=False):
+            client = musicbrainz.MusicBrainzClient(musicbrainz.JsonCache(Path(self.temp.name) / "cache.json"),
+                                                   "legacy-user", "bad-password")
+            client.session.get = Mock(side_effect=(denied, accepted))
+            self.assertEqual(client.request("genre/all"), {"genres": []})
             self.assertIsNone(client.session.auth)
-            client.authenticate()
             self.assertEqual(client.session.headers["Authorization"], "Bearer access")
 
 

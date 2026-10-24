@@ -681,8 +681,8 @@ class MusicBrainzClient:
         self.client = client
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": client, "Accept": "application/json"})
-        self.oauth = OAuthManager.from_environment()
-        if not self.oauth and username and password:
+        self.oauth = None if username and password else OAuthManager.from_environment()
+        if username and password:
             self.session.auth = HTTPDigestAuth(username, password)
         self._next_request_at = 0.0
 

@@ -53,8 +53,8 @@ class MusicBrainzClient:
         self.cache = cache
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": f"{CLIENT} ({contact})", "Accept": "application/json"})
-        self.oauth = OAuthManager.from_environment()
-        if not self.oauth and username and password:
+        self.oauth = None if username and password else OAuthManager.from_environment()
+        if username and password:
             self.session.auth = HTTPDigestAuth(username, password)
         self.next_request = 0.0
 
@@ -74,6 +74,15 @@ class MusicBrainzClient:
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < len(RETRY_DELAYS):
                     time.sleep(int(response.headers.get("Retry-After", delay)))
                     continue
+                if response.status_code in {401, 403}:
+                    fallback = OAuthManager.from_environment() if self.session.auth is not None else None
+                    if fallback:
+                        self.oauth = fallback
+                        self.session.auth = None
+                        continue
+                    notice = oauth.authorization_notice()
+                    if notice:
+                        logging.error(notice)
                 response.raise_for_status()
                 return response.json()
             except (requests.ConnectionError, requests.Timeout):
@@ -133,6 +142,15 @@ class MusicBrainzClient:
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < len(RETRY_DELAYS):
                     time.sleep(int(response.headers.get("Retry-After", delay)))
                     continue
+                if response.status_code in {401, 403}:
+                    fallback = OAuthManager.from_environment() if self.session.auth is not None else None
+                    if fallback:
+                        self.oauth = fallback
+                        self.session.auth = None
+                        continue
+                    notice = oauth.authorization_notice()
+                    if notice:
+                        logging.error(notice)
                 response.raise_for_status()
                 return
             except (requests.ConnectionError, requests.Timeout):

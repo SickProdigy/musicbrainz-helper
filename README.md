@@ -448,27 +448,29 @@ reports name that account. Retagging adds upvotes for new genres without
 automatically withdrawing old votes. MusicBrainz retains user-specific tag votes,
 not a complete restorable copy of the library.
 
-The arr-scripts installer installs this package at a pinned release. Configure an
-Installed Application client ID and secret in `extended.conf`, then run:
+The arr-scripts installer installs this package at a pinned release. Its default
+configuration uses the MusicBrainz username and generated Digest token entirely
+from `extended.conf`. OAuth is an optional fallback. When configured without a
+completed grant, the worker writes the approval URL to Lidarr's logs. After
+approval, finish the link once with:
 
 ```bash
-bash /config/extended/MusicBrainzGenres.bash --authorize
+bash /config/extended/MusicBrainzGenres.bash --complete-authorization
 ```
 
-The command prints the MusicBrainz approval URL and prompts for the one-time
-authorization code. It stores the refresh token privately under
+The command prompts for the one-time authorization code. It stores the refresh token privately under
 `/config/extended/musicbrainz-helper/`; workers refresh short-lived access tokens
 automatically. Enabled and authenticated installations contribute automatically.
 The wrapper uses `--account-profile` to derive a safe,
 distinct local profile from `MB_USERNAME`; no extra profile or submission setting
 is needed. The standalone CLI above retains explicit preview/submission controls.
 
-For standalone use, set `MB_OAUTH_CLIENT_ID`, `MB_OAUTH_CLIENT_SECRET`,
+For optional standalone OAuth, set `MB_OAUTH_CLIENT_ID`, `MB_OAUTH_CLIENT_SECRET`,
 `MB_OAUTH_TOKEN_FILE`, and optionally `MB_OAUTH_REDIRECT_URI`, then run
 `musicbrainz-auth authorize`. OAuth requests only `tag`, `rating`, and `profile`
 permissions. Tokens are never passed in command arguments or written to reports.
-`MB_TOKEN` remains a deprecated Digest-token fallback; `MB_PASSWORD` is its legacy
-alias. Do not store the MusicBrainz website password.
+`MB_PASSWORD` is the default Digest credential and `MB_TOKEN` remains its legacy
+alias. A generated Digest token is recommended instead of the website password.
 ## Arr-scripts integration
 
 Arr-scripts installs a pinned release and calls the same `musicbrainz-genres` and `musicbrainz-ratings` commands used manually. Event callbacks enqueue work; background workers make the remote requests. Existing queues and account-specific submission history remain in `/config/extended/`.
@@ -481,8 +483,8 @@ The [ratings worker](musicbrainz_helper/ratings_worker.py) handles queue and his
 
 The normal ratings command reads existing Subsonic ratings and preserves its artist, album, and song options. To contribute ratings for unrated recordings, the background/library adapter also supports an independent Last.fm source. Existing personal ratings take priority. No computed rating is written to Subsonic; the vote is sent to MusicBrainz, where SonicRatings can later find it.
 
-Configure `.env` with your Subsonic/Navidrome credentials, authorized MusicBrainz
-OAuth settings, and `LASTFM_API_KEY`. With `RATINGS_SUBMIT` unset or false, preview
+Configure `.env` with your Subsonic/Navidrome credentials, MusicBrainz credentials,
+and `LASTFM_API_KEY`. With `RATINGS_SUBMIT` unset or false, preview
 a library contribution pass, then explicitly submit:
 
 ```bash
