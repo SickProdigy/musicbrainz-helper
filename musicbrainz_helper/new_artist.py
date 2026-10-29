@@ -181,7 +181,9 @@ def extract_apple_id(value: str) -> tuple[int, str]:
     if "music.apple.com" not in parsed.netloc.casefold():
         raise ValueError("Expected an Apple Music URL or numeric Apple ID.")
     query_id = parse_qs(parsed.query).get("i", [None])[0]
-    path_match = re.search(r"/(artist|album)/[^/]+/(\d+)", parsed.path)
+    # MusicBrainz relationships commonly omit Apple's display-name slug and use
+    # /artist/123, while links copied from Apple use /artist/name/123.
+    path_match = re.search(r"/(artist|album)/(?:[^/]+/)?(\d+)(?:/|$)", parsed.path)
     if not path_match:
         raise ValueError("Could not find an artist or album ID in the Apple Music URL.")
     kind, path_id = path_match.groups()

@@ -15,6 +15,14 @@ class NewArtistHelperTests(unittest.TestCase):
             (6776781654, "artist"),
         )
         self.assertEqual(
+            helper.extract_apple_id("https://music.apple.com/us/artist/894820464"),
+            (894820464, "artist"),
+        )
+        self.assertEqual(
+            helper.extract_apple_id("https://music.apple.com/gb/album/6803960307"),
+            (6803960307, "album"),
+        )
+        self.assertEqual(
             helper.extract_apple_id(
                 "https://music.apple.com/us/album/he-said-i-looked-fine-single/6803960307"
             ),
