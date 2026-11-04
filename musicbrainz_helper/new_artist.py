@@ -298,7 +298,8 @@ class MusicBrainzClient:
         )
         self.next_request_at = 0.0
 
-    def search(self, entity: str, query: str, limit: int = 10) -> dict:
+    def request_json(self, path: str, params: dict[str, object] | None = None) -> dict:
+        """GET MusicBrainz JSON with rate limiting and transient-failure retries."""
         for attempt, delay in enumerate((*MUSICBRAINZ_RETRY_DELAYS, 0), start=1):
             wait = self.next_request_at - time.monotonic()
             if wait > 0:
@@ -306,12 +307,15 @@ class MusicBrainzClient:
             self.next_request_at = time.monotonic() + 1.1
             try:
                 response = self.session.get(
-                    f"{MUSICBRAINZ_API_URL}/{entity}",
-                    params={"query": query, "fmt": "json", "limit": limit},
+                    f"{MUSICBRAINZ_API_URL}/{path.lstrip('/')}",
+                    params=params or {"fmt": "json"},
                     timeout=30,
                 )
                 if response.status_code in {429, 500, 502, 503, 504} and delay:
-                    retry_after = int(response.headers.get("Retry-After", delay))
+                    try:
+                        retry_after = max(0, int(response.headers.get("Retry-After", delay)))
+                    except (TypeError, ValueError):
+                        retry_after = delay
                     logging.warning("MusicBrainz returned %s; retrying in %ss.", response.status_code, retry_after)
                     time.sleep(retry_after)
                     continue
@@ -322,7 +326,12 @@ class MusicBrainzClient:
                     raise
                 logging.warning("MusicBrainz request %d failed; retrying in %ss.", attempt, delay)
                 time.sleep(delay)
-        raise RuntimeError("MusicBrainz search retries were exhausted.")
+        raise RuntimeError("MusicBrainz request retries were exhausted.")
+
+    def search(self, entity: str, query: str, limit: int = 10) -> dict:
+        return self.request_json(
+            entity, {"query": query, "fmt": "json", "limit": limit}
+        )
 
     def artist_matches(self, name: str) -> list[Match]:
         payload = self.search("artist", f"artist:{lucene_quote(name)}", 10)
@@ -338,26 +347,10 @@ class MusicBrainzClient:
         ]
 
     def artist_name(self, mbid: str) -> str | None:
-        wait = self.next_request_at - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        self.next_request_at = time.monotonic() + 1.1
-        response = self.session.get(
-            f"{MUSICBRAINZ_API_URL}/artist/{mbid}", params={"fmt": "json"}, timeout=30
-        )
-        response.raise_for_status()
-        return str(response.json().get("name", "")) or None
+        return str(self.request_json(f"artist/{mbid}").get("name", "")) or None
 
     def release_date(self, mbid: str) -> str:
-        wait = self.next_request_at - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        self.next_request_at = time.monotonic() + 1.1
-        response = self.session.get(
-            f"{MUSICBRAINZ_API_URL}/release/{mbid}", params={"fmt": "json"}, timeout=30
-        )
-        response.raise_for_status()
-        return str(response.json().get("date", ""))
+        return str(self.request_json(f"release/{mbid}").get("date", ""))
 
     def release_matches(self, release: AppleRelease, artist_mbid: str | None) -> list[Match]:
         artist_query = f"arid:{artist_mbid}" if artist_mbid else f"artist:{lucene_quote(release.artist)}"

@@ -2,13 +2,27 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 
 from musicbrainz_helper import new_artist as helper
 
 
 class NewArtistHelperTests(unittest.TestCase):
+    def test_release_lookup_retries_transient_musicbrainz_failure(self):
+        unavailable = Mock(status_code=503, headers={"Retry-After": "1"})
+        available = Mock(status_code=200, headers={})
+        available.json.return_value = {"date": "2016-03-04"}
+        client = helper.MusicBrainzClient()
+        client.session.get = Mock(side_effect=[unavailable, available])
+
+        with patch.object(helper.time, "sleep"):
+            result = client.release_date("release-mbid")
+
+        self.assertEqual(result, "2016-03-04")
+        self.assertEqual(client.session.get.call_count, 2)
+        available.raise_for_status.assert_called_once_with()
+
     def test_extracts_artist_and_album_ids(self):
         self.assertEqual(
             helper.extract_apple_id("https://music.apple.com/us/artist/youngvynn-q/6776781654"),
