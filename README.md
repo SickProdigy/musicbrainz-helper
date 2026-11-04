@@ -498,6 +498,6 @@ Arr-scripts calls the same entry point with `enqueue`, `work`, and `library`. It
 
 A caller may supply generated-rating provenance with `RATINGS_GENERATED_RATINGS=/path/to/generated-ratings.json`, or `RATINGS_GENERATED_RATINGS_DIR=/path/to/scoped-state`. The worker checks the song and recording identity before using a source label. MusicBrainz-derived values stay excluded; later personal changes remain eligible. Arr-scripts passes this path automatically without adding a SonicRatings dependency to this package.
 
-Package version is **0.5.4**. Publish its matching version tag before deploying the corresponding arr-scripts pin. Standalone helper use requires only this package; arr-scripts pins tested helper releases during installation.
+Package version is **0.5.5**. Publish its matching version tag before deploying the corresponding arr-scripts pin. Standalone helper use requires only this package; arr-scripts pins tested helper releases during installation.
 
 Run checks with `python -B -m unittest discover -s tests -p 'test_*.py'`.

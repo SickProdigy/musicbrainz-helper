@@ -7,13 +7,13 @@ from unittest.mock import Mock
 
 import requests
 
-
+from musicbrainz_helper import __version__
 from musicbrainz_helper import lastfm_genres as helper
 
 
 class LidarrLastFmGenresHelperTests(unittest.TestCase):
     def test_musicbrainz_user_agent_identifies_name_and_version(self):
-        self.assertEqual(helper.CLIENT, "musicbrainz-helper/0.5.3")
+        self.assertEqual(helper.CLIENT, f"musicbrainz-helper/{__version__}")
 
     def test_filters_ranked_tags_to_musicbrainz_genres(self):
         tags = [
